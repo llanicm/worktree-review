@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { BlameResponse, BlameRun, Commit, CommitDiff, CommitsDiff, DiffResponse, FullDiff } from '../shared/api.ts';
+import type { BlameCommit, BlameResponse, BlameRun, Commit, CommitDiff, CommitsDiff, DiffResponse, FileBlame, FileBlameRun, FullDiff } from '../shared/api.ts';
 import { git, gitOk, httpError } from './exec.ts';
 import { TMP_DIR } from './paths.ts';
 import { wtState } from './state.ts';
@@ -191,4 +191,55 @@ export async function getDiff(wt: WorktreeRecord, mode: string | null): Promise<
     diff: diff.slice(0, MAX_DIFF),
   };
   return warmBlame(result);
+}
+
+const UNCOMMITTED = '0'.repeat(40);
+
+// Full-history blame of one file as it is in the worktree, uncommitted edits included, for the
+// Blame view. Only on request, one file at a time, because it reads the file's whole history.
+export async function getFileBlame(wt: WorktreeRecord, file: string): Promise<FileBlame> {
+  await refreshWorktree(wt);
+  const abs = path.resolve(wt.path, file);
+  if (!file || !abs.startsWith(wt.path + path.sep)) throw httpError(400, 'Not a file in this worktree');
+  let size: number;
+  try { size = fs.statSync(abs).size; } catch { throw httpError(404, `${file} isn't in the worktree`); }
+  if (size > 2 * 1024 * 1024) throw httpError(413, `${file} is too big to blame`);
+  const mergeBase = wt.mergeBase;
+  const fp = wt.fingerprint;
+  return memo(wt, `fileblame:${file}`, async () => {
+    const commits = mergeBase ? await commitsFor(wt, mergeBase) : [];
+    const byShaN = new Map(commits.map((c) => [c.sha, c.n]));
+    const info: Record<string, BlameCommit> = {};
+    const runs: FileBlameRun[] = [];
+    let out: string | null = null;
+    try { out = await git(wt.path, ['blame', '--porcelain', '--contents', abs, '--', file], { timeout: 30_000 }); } catch {}
+    if (out === null) {
+      // Not in any commit yet (a new, untracked file): every line is uncommitted.
+      const lines = fs.readFileSync(abs, 'utf8').split('\n').length;
+      info[UNCOMMITTED] = { sha: UNCOMMITTED, author: 'You', time: fs.statSync(abs).mtimeMs, summary: 'Not committed yet', n: 0 };
+      runs.push([1, Math.max(1, lines - 1), UNCOMMITTED]);
+      return { file, fingerprint: fp, commits: info, runs };
+    }
+    let sha = '';
+    for (const line of out.split('\n')) {
+      if (line.startsWith('\t')) continue; // the line's content
+      const head = line.match(/^([0-9a-f]{40}) \d+ (\d+)/);
+      if (head) {
+        sha = head[1] ?? '';
+        const ln = Number(head[2]);
+        const last = runs[runs.length - 1];
+        if (last && last[2] === sha && last[1] === ln - 1) last[1] = ln; else runs.push([ln, ln, sha]);
+        info[sha] ||= { sha, author: '', time: 0, summary: '', n: sha === UNCOMMITTED ? 0 : byShaN.get(sha) ?? null };
+        continue;
+      }
+      const c = info[sha];
+      if (!c) continue;
+      const sp = line.indexOf(' ');
+      const key = sp === -1 ? line : line.slice(0, sp), val = sp === -1 ? '' : line.slice(sp + 1);
+      if (key === 'author') c.author = sha === UNCOMMITTED ? 'You' : val;
+      else if (key === 'author-time') c.time = Number(val) * 1000;
+      else if (key === 'summary') c.summary = sha === UNCOMMITTED ? 'Not committed yet' : val;
+    }
+    return { file, fingerprint: fp, commits: info, runs };
+  });
 }

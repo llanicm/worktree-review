@@ -1,12 +1,12 @@
 import fs from 'node:fs';
 import type {
-  BlameResponse, CodeRabbitLogin, CodeRabbitResponse, CodeRabbitReview, Comment, CommentsResponse, DiffResponse, DirListing,
+  BlameResponse, FileBlame, CodeRabbitLogin, CodeRabbitResponse, CodeRabbitReview, Comment, CommentsResponse, DiffResponse, DirListing,
   Finding, HookResponse, Integrations, Job, NewComment, Ok, PromptResponse, PublicState, RepairResult, Review, SendAllResponse,
   ShutdownResponse,
 } from '../shared/api.ts';
 import { cleanupStatus } from './cleanup-status.ts';
 import { cancelCodeRabbit, crUsage, findingToComment, getFinding, startCodeRabbit } from './coderabbit.ts';
-import { getBlame, getDiff } from './diffs.ts';
+import { getBlame, getDiff, getFileBlame } from './diffs.ts';
 import { gitOk, httpError } from './exec.ts';
 import { getIntegrations, markHook, probe, startCodeRabbitLogin } from './integrations.ts';
 import { deferShutdown, jobs, jobsRunning, shutdownNow, startJob } from './jobs.ts';
@@ -22,7 +22,7 @@ import { getWt, refreshWorktree } from './worktrees.ts';
 
 /** Everything a route can answer with. Handlers are checked against this, so a response can't drift from ../shared/api.ts. */
 type ApiResult =
-  | PublicState | DiffResponse | BlameResponse | CommentsResponse | PromptResponse | Ok | Job | RepairResult | CodeRabbitResponse
+  | PublicState | DiffResponse | BlameResponse | FileBlame | CommentsResponse | PromptResponse | Ok | Job | RepairResult | CodeRabbitResponse
   | CodeRabbitReview | Finding | SendAllResponse | DirListing | Integrations | CodeRabbitLogin | Comment | Review | ShutdownResponse | HookResponse;
 
 type Handler = (m: RegExpMatchArray, body: unknown, url: URL) => ApiResult | Promise<ApiResult>;
@@ -37,6 +37,7 @@ export const routes: Route[] = [
   ['GET', /^\/api\/state$/, () => publicState()],
   ['GET', /^\/api\/worktrees\/(\w+)\/diff$/, (m, _body, url) => getDiff(getWt(arg(m)), url.searchParams.get('mode'))],
   ['GET', /^\/api\/worktrees\/(\w+)\/blame$/, (m) => getBlame(getWt(arg(m)))],
+  ['GET', /^\/api\/worktrees\/(\w+)\/blame\/file$/, (m, _body, url) => getFileBlame(getWt(arg(m)), url.searchParams.get('path') || '')],
   ['GET', /^\/api\/worktrees\/(\w+)\/comments$/, (m): CommentsResponse => {
     getWt(arg(m));
     return {

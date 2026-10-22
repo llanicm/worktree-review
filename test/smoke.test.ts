@@ -116,6 +116,17 @@ test('diffs: full, by commit, blame', async () => {
   // Runs of [firstLine, lastLine, commitNumber]; uncommitted lines are commit 0.
   assert.ok(blame.lines['src/checkout.ts'].some((r: number[]) => r[2] === 0), 'uncommitted lines are commit 0');
   assert.ok(blame.lines['src/discounts.ts'].every((r: number[]) => r[2] === 1));
+  // Full-history blame of one file: lines from before the branch, from its commits, and uncommitted.
+  const fb = await get(`/api/worktrees/${wt.id}/blame/file?path=src/checkout.ts`);
+  const who = (ln: number) => fb.commits[fb.runs.find((r: Json) => r[0] <= ln && ln <= r[1])[2]];
+  assert.equal(who(1).n, null, 'line 1 is from before the branch');
+  assert.equal(who(1).summary, 'Initial shop: cart and checkout');
+  assert.equal(who(1).author, 'Sam Rivera');
+  assert.equal(who(3).n, 2, "the discounts import came in commit #2");
+  assert.equal(who(5).n, 0, 'the DiscountError class is uncommitted');
+  assert.equal(who(5).summary, 'Not committed yet');
+  assert.equal((await api('GET', `/api/worktrees/${wt.id}/blame/file?path=../../etc/passwd`)).status, 400);
+  assert.equal((await api('GET', `/api/worktrees/${wt.id}/blame/file?path=nope.ts`)).status, 404);
   const missing = await api('GET', '/api/worktrees/nope/diff');
   assert.equal(missing.status, 404);
 });

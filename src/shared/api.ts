@@ -266,6 +266,28 @@ export interface BlameResponse {
   lines: Record<string, BlameRun[]>;
 }
 
+/** A commit that last changed some lines of a file, for the Blame view. */
+export interface BlameCommit {
+  /** 40 zeros when the lines aren't committed yet. */
+  sha: string;
+  author: string;
+  time: number;
+  summary: string;
+  /** Its number on this branch (1-based), 0 when uncommitted, null when it's from before the branch. */
+  n: number | null;
+}
+
+/** [firstLine, lastLine, sha]: lines of the working file that last changed in one commit. */
+export type FileBlameRun = [number, number, string];
+
+/** GET /api/worktrees/:id/blame/file?path=: full-history blame of one file as it is in the worktree. */
+export interface FileBlame {
+  file: string;
+  fingerprint: string | null;
+  commits: Record<string, BlameCommit>;
+  runs: FileBlameRun[];
+}
+
 // ---------- comments & reviews ----------
 
 export type CommentStatus = 'draft' | 'pending' | 'delivered' | 'resolved';

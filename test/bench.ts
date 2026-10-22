@@ -73,6 +73,10 @@ try {
     record('page: open the big worktree, main thread', fmt({ total: Math.round(after.reduce((a, b) => a + b, 0)), longest: Math.round(Math.max(0, ...after)), tasks: after.length }));
     void open;
     record('page: DOM nodes / diff rows rendered', `${await page.eval("document.getElementsByTagName('*').length")} / ${await page.eval("document.querySelectorAll('tr.line').length")}`);
+    record('page: collapse one file', fmt(await blocking(page, "document.querySelector('[data-act=toggle-file]').click()", 1200)));
+    record('page: expand it again', fmt(await blocking(page, "document.querySelector('[data-act=toggle-file]').click()", 1200)));
+    record('page: Collapse all', fmt(await blocking(page, "document.querySelector('[data-act=collapse-all]').click()", 1200)));
+    record('page: expand one file after Collapse all', fmt(await blocking(page, "document.querySelector('[data-act=toggle-file]').click()", 1200)));
     record('page: switch to By commit', fmt(await blocking(page, "document.querySelector('[data-act=mode][data-mode=commits]').click()")));
     record('page: switch back to All changes', fmt(await blocking(page, "document.querySelector('[data-act=mode][data-mode=full]').click()")));
     // A live update that doesn't concern this worktree: another worktree gets a new file.
