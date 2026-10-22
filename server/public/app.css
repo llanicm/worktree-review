@@ -542,3 +542,8 @@ td.code .cbar { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; back
 .job .actions { gap: 10px; }
 .chip.busy-chip { color: var(--amber); border-color: currentColor; }
 @media (prefers-reduced-motion: reduce) { .job.running .bar .fill { animation: none; } }
+.callout .notes { margin: 6px 0 0; padding-left: 20px; color: var(--fg-muted); font-size: 13px; }
+.callout details { margin-top: 6px; font-size: 13px; }
+.callout details summary { cursor: pointer; color: var(--accent); }
+.file-list { margin: 6px 0 0; padding-left: 18px; max-height: 220px; overflow: auto; font-size: 12px; }
+.file-list li { margin: 1px 0; }

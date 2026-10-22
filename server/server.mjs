@@ -313,6 +313,16 @@ function resolveBase(wt) {
   return { ref: repo.defaultBase, source: 'default' };
 }
 
+const LOCKFILES = /(^|\/)(pnpm-lock\.yaml|package-lock\.json|yarn\.lock|bun\.lockb?|Cargo\.lock|poetry\.lock|uv\.lock|Gemfile\.lock|go\.sum|composer\.lock)$/;
+
+// What kind of uncommitted changes these are, which decides whether removing the worktree could lose work.
+function classifyDirty(entries) {
+  if (!entries.length) return null;
+  if (entries.every((e) => e.xy === ' D' || e.xy === 'D ')) return 'deleted-only'; // files missing from disk; still in the branch
+  if (entries.every((e) => LOCKFILES.test(e.file) && /M/.test(e.xy))) return 'lockfile-only';
+  return 'work';
+}
+
 function parseStatus(out) {
   const parts = out.split('\0');
   const entries = [];
@@ -346,8 +356,11 @@ async function refreshWorktree(wt, { force = false } = {}) {
       wt.commitTime = Number((await git(wt.path, ['log', '-1', '--format=%ct'])).trim()) * 1000;
       wt.stackBase = await detectStackBase(wt, repo);
       wt.headInMerged = null;
+      wt.unmatched = null;
     }
     wt.dirty = entries.length;
+    wt.dirtyFiles = entries.slice(0, 50).map((e) => ({ xy: e.xy, file: e.file }));
+    wt.dirtyKind = classifyDirty(entries);
     wt.untracked = entries.filter((e) => e.xy === '??').length;
     wt.lastActivity = Math.max(wt.commitTime || 0, maxMtime);
     const base = resolveBase(wt);
@@ -536,27 +549,72 @@ function openReviewItems(wtId) {
 function cleanupStatus(wt, { ignoreBusy = false } = {}) {
   const pr = wt.pr;
   if (!pr || pr.state !== 'MERGED' || wt.isMain || !wt.branch) return null;
-  const reasons = [];
-  if (wt.error) reasons.push(wt.error.kind === 'broken-link' ? "git can't read it (broken link to its repository)" : `git can't read it: ${wt.error.message}`);
-  if (wt.locked) reasons.push('the worktree is locked');
-  if (wt.dirty > 0) reasons.push(`${wt.dirty} uncommitted change${wt.dirty === 1 ? '' : 's'}`);
-  if (wt.sessions.length) reasons.push(`in use by ${wt.sessions.map((s) => s.name).join(', ')}`);
-  if (wt.head && wt.head !== pr.headRefOid && wt.headInMerged !== true) reasons.push('has commits that are not in the merged PR');
+  // Removing the worktree only risks uncommitted work; commits live on the branch, which
+  // is only deleted when everything on it is in the merged PR.
+  const reasons = [];   // block removal
+  const notes = [];     // don't block, but worth knowing
+  let forceable = true; // can "Remove anyway" override every reason?
+  const hard = (r) => { reasons.push(r); forceable = false; };
+  if (wt.error) hard(wt.error.kind === 'broken-link' ? "git can't read it (broken link to its repository)" : `git can't read it: ${wt.error.message}`);
+  if (wt.locked) hard('the worktree is locked');
+  if (wt.dirty > 0) {
+    const n = `${wt.dirty} file${wt.dirty === 1 ? '' : 's'}`;
+    if (wt.dirtyKind === 'deleted-only') notes.push(`${n} missing from disk, but they're still in the branch, so nothing is lost`);
+    else if (wt.dirtyKind === 'lockfile-only') reasons.push(`only a lockfile changed (${[...new Set(wt.dirtyFiles.map((f) => f.file.split('/').pop()))].join(', ')}), usually from installing dependencies`);
+    else reasons.push(`${n} with uncommitted changes`);
+  }
+  if (wt.sessions.length) hard(`in use by ${wt.sessions.map((s) => s.name).join(', ')}`);
   if (openReviewItems(wt.id)) reasons.push('has unsent review comments');
-  if (wt.busy && !ignoreBusy) reasons.push('being removed right now');
+  if (wt.busy && !ignoreBusy) hard('being removed right now');
+  const branchSafe = !!wt.head && (wt.head === pr.headRefOid || wt.headInMerged === true);
+  if (!branchSafe) {
+    notes.push(wt.headInMerged === null ? 'still checking whether its commits are in the PR; the branch is kept until that is known'
+      : wt.unmatched?.length
+        ? `the branch is kept: ${wt.unmatched.length} commit${wt.unmatched.length === 1 ? ' has' : 's have'} no matching change in the merged PR (often commits from a stacked parent PR that merged separately)`
+        : "the branch is kept: its commits couldn't be matched to the merged PR");
+  }
   return {
     eligible: reasons.length === 0,
-    reasons,
+    reasons, notes, branchSafe,
+    forceable: reasons.length > 0 && forceable,
+    dirty: wt.dirty ? { kind: wt.dirtyKind, count: wt.dirty, files: wt.dirtyFiles.slice(0, 20) } : null,
+    unmatched: branchSafe ? [] : (wt.unmatched || []).slice(0, 12),
     auto: config.autoCleanup && Date.parse(pr.mergedAt) >= state.installedAt,
   };
+}
+
+// Is the local branch's work all in the merged PR? Fetches the PR's head if it isn't local yet,
+// and matches commits by content so a rebased PR still counts.
+async function checkBranchInPR(wt) {
+  const pr = wt.pr;
+  const repo = repos.get(wt.repoKey);
+  if (wt.head === pr.headRefOid) { wt.headInMerged = true; wt.unmatched = []; return; }
+  if (!(await gitOk(repo.root, ['cat-file', '-e', `${pr.headRefOid}^{commit}`]))) {
+    await run('git', ['fetch', '-q', 'origin', pr.headRefOid], { cwd: repo.root, timeout: 60_000 }).catch(() => {});
+    if (!(await gitOk(repo.root, ['cat-file', '-e', `${pr.headRefOid}^{commit}`]))) {
+      wt.headInMerged = false;
+      wt.unmatched = [];
+      return;
+    }
+  }
+  if (await gitOk(wt.path, ['merge-base', '--is-ancestor', wt.head, pr.headRefOid])) { wt.headInMerged = true; wt.unmatched = []; return; }
+  const cherry = await git(wt.path, ['cherry', pr.headRefOid, wt.head]).catch(() => '');
+  const shas = cherry.split('\n').filter((l) => l.startsWith('+ ')).map((l) => l.slice(2).trim());
+  wt.unmatched = [];
+  for (const sha of shas.slice(0, 50)) {
+    const subject = (await git(wt.path, ['log', '-1', '--format=%s', sha]).catch(() => '')).trim();
+    wt.unmatched.push({ sha, subject });
+  }
+  // Every non-merge commit has an equivalent in the PR: the branch was rebased, nothing unique on it.
+  wt.headInMerged = shas.length === 0;
 }
 
 async function runCleanup() {
   for (const wt of [...wts.values()]) {
     const pr = wt.pr;
     if (!pr || pr.state !== 'MERGED' || wt.isMain || !wt.head) continue;
-    if (wt.head !== pr.headRefOid && wt.headInMerged === null) {
-      wt.headInMerged = await gitOk(wt.path, ['merge-base', '--is-ancestor', wt.head, pr.headRefOid]);
+    if (wt.headInMerged === null && !wt.error) {
+      await checkBranchInPR(wt).catch((e) => log('branch check failed', wt.path, e.message));
       changed();
     }
     const cs = cleanupStatus(wt);
@@ -566,7 +624,7 @@ async function runCleanup() {
   }
 }
 
-async function removeWorktree(wt, how) {
+async function removeWorktree(wt, how, { force = false } = {}) {
   const repo = repos.get(wt.repoKey);
   refreshSessions();
   try {
@@ -578,22 +636,31 @@ async function removeWorktree(wt, how) {
   }
   const cs = cleanupStatus(wt, { ignoreBusy: true });
   if (!cs) throw new Error('This worktree has no merged PR.');
-  if (!cs.eligible) throw new Error(`Not safe to remove: ${cs.reasons.join('; ')}.`);
+  if (!cs.eligible && !(force && cs.forceable)) throw new Error(`Not safe to remove: ${cs.reasons.join('; ')}.`);
+  // git refuses a dirty worktree without --force; only pass it when nothing unique can be lost or you asked for it.
+  const forceGit = force || wt.dirtyKind === 'deleted-only';
   // No --force: git refuses if anything modified or untracked appeared in the meantime.
   try {
-    await run('git', ['worktree', 'remove', wt.path], { cwd: repo.root });
+    await run('git', ['worktree', 'remove', ...(forceGit ? ['--force'] : []), wt.path], { cwd: repo.root });
   } catch (e) {
     const err = explainWorktreeError(gitError(e), wt);
     throw httpError(409, `Git refused to remove it: ${err.message}`);
   }
   let branchDeleted = false;
-  try {
-    const tip = (await git(repo.root, ['rev-parse', `refs/heads/${wt.branch}`])).trim();
-    if (tip === wt.head) { await git(repo.root, ['branch', '-D', wt.branch]); branchDeleted = true; }
-  } catch {}
+  let branchKept = null;
+  if (force) branchKept = 'kept because the worktree was removed with uncommitted changes';
+  else if (!cs.branchSafe) branchKept = cs.notes.find((n) => n.startsWith('the branch is kept')) || 'kept: not all of its commits are in the merged PR';
+  else {
+    try {
+      const tip = (await git(repo.root, ['rev-parse', `refs/heads/${wt.branch}`])).trim();
+      if (tip === wt.head) { await git(repo.root, ['branch', '-D', wt.branch]); branchDeleted = true; }
+      else branchKept = 'kept: the branch has moved since it was checked';
+    } catch {}
+  }
   await git(repo.root, ['worktree', 'prune']).catch(() => {});
   state.cleaned.unshift({
-    path: wt.path, branch: wt.branch, sha: wt.head, repoRoot: repo.root, how, branchDeleted, at: Date.now(),
+    path: wt.path, branch: wt.branch, sha: wt.head, repoRoot: repo.root, how: force ? 'forced' : how, branchDeleted, branchKept, at: Date.now(),
+    lostFiles: force ? wt.dirtyFiles.map((f) => f.file) : undefined,
     pr: { number: wt.pr.number, url: wt.pr.url, title: wt.pr.title },
   });
   state.cleaned = state.cleaned.slice(0, 100);
@@ -1168,6 +1235,7 @@ function publicState() {
         cleanup: cleanupStatus(wt),
         error: wt.error || null,
         busy: wt.busy || null,
+        dirtyKind: wt.dirtyKind || null,
         coderabbit: (() => {
           const r = state.coderabbit[wt.id];
           if (!r) return null;
@@ -1283,10 +1351,11 @@ const routes = [
     return { ok: true };
   }],
   ['POST', /^\/api\/worktrees\/(\w+)\/submit$/, (m, body) => submitReview(getWt(m[1]), body)],
-  ['POST', /^\/api\/worktrees\/(\w+)\/remove$/, (m) => {
+  ['POST', /^\/api\/worktrees\/(\w+)\/remove$/, (m, body) => {
     const wt = getWt(m[1]);
     if (wt.busy) throw httpError(409, 'This worktree is already being removed.');
-    return startJob('remove', `Removing ${wt.branch || 'worktree'}`, [wt], (w) => removeWorktree(w, 'manual'));
+    const force = body.force === true;
+    return startJob('remove', `Removing ${wt.branch || 'worktree'}${force ? ' (anyway)' : ''}`, [wt], (w) => removeWorktree(w, 'manual', { force }));
   }],
   // Test-only (WTR_TEST_JOBS=1): a slow fake cleanup over pretend worktrees, to exercise the progress UI.
   ...(process.env.WTR_TEST_JOBS === '1' ? [['POST', /^\/api\/test\/job$/, (m, body) => {

@@ -123,6 +123,8 @@ function wtItem(wt, showNew) {
       ${nComments ? `<span class="chip comments">${nComments} comment${nComments === 1 ? '' : 's'}</span>` : ''}
       ${wt.busy ? '<span class="chip busy-chip"><span class="dot busy"></span>removing…</span>' : ''}
       ${wt.error ? `<span class="chip closed" title="${esc(wt.error.message)}">${wt.error.kind === 'broken-link' ? 'broken link' : "can't read"}</span>`
+        : wt.dirtyKind === 'lockfile-only' ? '<span class="chip" title="Only a lockfile changed">lockfile changed</span>'
+        : wt.dirtyKind === 'deleted-only' ? `<span class="chip" title="Tracked files missing from disk; nothing is lost">${wt.dirty} missing</span>`
         : wt.dirty ? `<span class="chip" title="Uncommitted changes">${wt.dirty} uncommitted</span>` : ''}
       ${wt.coderabbit?.status === 'running' ? '<span class="chip cr"><span class="dot busy"></span>CodeRabbit</span>'
         : wt.coderabbit?.open ? `<span class="chip cr">${wt.coderabbit.open} finding${wt.coderabbit.open === 1 ? '' : 's'}</span>` : ''}
@@ -166,7 +168,8 @@ function renderSidebar() {
       <button class="link-btn" data-act="toggle-cleaned">${S.showCleaned ? 'hide' : 'show'}</button></div>`);
     if (S.showCleaned) {
       parts.push(`<div class="cleaned">${S.st.cleaned.map((c, i) => `<div class="item">
-        <div><strong>${esc(c.branch)}</strong> · <a href="${esc(c.pr.url)}" target="_blank">#${c.pr.number}</a> · ${c.how === 'auto' ? 'auto' : 'by you'} ${ago(c.at)}</div>
+        <div><strong>${esc(c.branch)}</strong> · <a href="${esc(c.pr.url)}" target="_blank">#${c.pr.number}</a> · ${c.how === 'auto' ? 'auto' : c.how === 'forced' ? 'removed anyway' : 'by you'} ${ago(c.at)}</div>
+        ${c.branchKept ? `<div>Branch ${esc(c.branchKept)}</div>` : ''}
         <div class="mono">${esc(shortPath(c.path))}</div>
         <button class="link-btn" data-act="copy-restore" data-i="${i}">Copy restore command</button>
       </div>`).join('')}</div>`);
@@ -570,10 +573,20 @@ function headerHtml(wt) {
     : '';
   const removeErr = S.removeErrors[wt.id] ? `<div class="callout danger"><strong>Couldn't remove this worktree.</strong><p>${esc(S.removeErrors[wt.id])}</p></div>` : '';
   if (cs) {
+    const STATUS = { ' M': 'modified', 'M ': 'staged', MM: 'staged + modified', 'A ': 'new, staged', AM: 'new, staged', ' D': 'missing', 'D ': 'deleted, staged', '??': 'untracked', 'R ': 'renamed' };
+    const files = cs.dirty ? `<details ${cs.dirty.kind === 'work' && cs.dirty.count <= 20 ? 'open' : ''}><summary>${cs.dirty.count} uncommitted file${cs.dirty.count === 1 ? '' : 's'}</summary>
+        <ul class="file-list">${cs.dirty.files.map((f) => `<li><code>${esc(f.file)}</code> <span class="muted small">${esc(STATUS[f.xy] || f.xy.trim())}</span></li>`).join('')}${cs.dirty.count > cs.dirty.files.length ? `<li class="muted">…and ${cs.dirty.count - cs.dirty.files.length} more</li>` : ''}</ul></details>` : '';
+    const commits = cs.unmatched?.length ? `<details><summary>${cs.unmatched.length} commit${cs.unmatched.length === 1 ? '' : 's'} with no matching change in the PR (kept on the branch)</summary>
+        <ul class="file-list">${cs.unmatched.map((c) => `<li><code>${esc(c.sha.slice(0, 8))}</code> ${esc(c.subject)}</li>`).join('')}</ul></details>` : '';
+    const notes = cs.notes.length ? `<ul class="notes">${cs.notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>` : '';
+    const busy = wt.busy ? '<span class="muted"><span class="dot busy"></span> Removing…</span>' : '';
     cleanup = cs.eligible
-      ? `<div class="callout merged"><strong>PR merged.</strong> This worktree is clean and nothing is using it. ${cs.auto && S.st.config.autoCleanup ? 'It will be removed automatically in a moment.' : 'It was merged before auto-cleanup was set up, so it waits for you.'}
-          <div class="actions" style="margin-top:8px">${wt.busy ? '<span class="muted"><span class="dot busy"></span> Removing…</span>' : '<button class="btn danger" data-act="remove">Remove worktree</button>'}</div></div>`
-      : `<div class="callout warn"><strong>PR merged, but it isn't safe to remove this worktree automatically:</strong><ul>${cs.reasons.map((r) => `<li>${esc(r)}</li>`).join('')}</ul></div>`;
+      ? `<div class="callout merged"><strong>PR merged.</strong> Nothing uncommitted would be lost and nothing is using it. ${cs.auto && S.st.config.autoCleanup ? 'It will be removed automatically in a moment.' : 'It was merged before auto-cleanup was set up, so it waits for you.'}
+          ${notes}${files}${commits}
+          <div class="actions" style="margin-top:8px">${busy || `<button class="btn danger" data-act="remove">Remove worktree${cs.branchSafe ? ' and branch' : ''}</button>`}</div></div>`
+      : `<div class="callout warn"><strong>PR merged, but removing this worktree could lose something:</strong>
+          <ul>${cs.reasons.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>${notes}${files}${commits}
+          ${cs.forceable ? `<div class="actions" style="margin-top:8px">${busy || '<button class="btn danger" data-act="remove-anyway">Remove anyway…</button><span class="muted small">The branch is kept either way.</span>'}</div>` : ''}</div>`;
   }
   return `<div class="title-row"><h1>${esc(name)}${pr}</h1>
       <div class="actions">${prChip(wt.pr)}${wt.sessions.map(sessionChip).join('')}</div></div>
@@ -1243,6 +1256,19 @@ const actions = {
     if (!confirm('Remove this worktree? Its branch is deleted too if it matches the merged PR.')) return;
     delete S.removeErrors[S.selId];
     await api('POST', `/api/worktrees/${S.selId}/remove`);
+  },
+  'remove-anyway': async () => {
+    const wt = curWt();
+    const cs = wt.cleanup;
+    const lost = cs.dirty ? cs.dirty.files.map((f) => `  • ${f.file}`).join('\n') + (cs.dirty.count > cs.dirty.files.length ? `\n  …and ${cs.dirty.count - cs.dirty.files.length} more` : '') : '';
+    const comments = wt.comments.draft + wt.comments.waiting;
+    const msg = [`Remove ${wt.branch} anyway?`, '',
+      lost ? `These uncommitted changes will be lost:\n${lost}` : '',
+      comments ? `${comments} unsent review comment${comments === 1 ? '' : 's'} will stay in the dashboard's history but can't be delivered.` : '',
+      '', `The branch ${wt.branch} is kept, so its commits are safe.`].filter((l, i, a) => l || a[i - 1]).join('\n');
+    if (!confirm(msg)) return;
+    delete S.removeErrors[wt.id];
+    await api('POST', `/api/worktrees/${wt.id}/remove`, { force: true });
   },
   'cleanup-safe': async () => {
     const n = S.st.worktrees.filter((w) => w.cleanup?.eligible).length;
