@@ -1,0 +1,37 @@
+name: build
+# Rebuilds dist/ from src/ after every change to main and commits it if it changed. dist/ is what a
+# Claude Code plugin install runs (installs have no build step), so contributors never build it by hand.
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['dist/**', '**.md', 'docs/**']
+# Pushes with the BUILD_DEPLOY_KEY deploy key, which the "Protect main" ruleset lets through; the
+# workflow's own token can't bypass it on a personal account.
+permissions:
+  contents: read
+concurrency:
+  group: build-main
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ssh-key: ${{ secrets.BUILD_DEPLOY_KEY }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Commit dist/ if it changed
+        run: |
+          git add dist
+          if git diff --cached --quiet; then echo "dist/ is already up to date."; exit 0; fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "Build dist/ from ${GITHUB_SHA::7}"
+          git pull --rebase origin main
+          git push origin HEAD:main

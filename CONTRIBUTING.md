@@ -20,9 +20,9 @@ for the page tests.
 
 ```sh
 npm install
-npm run watch       # rebuild dist/ as you edit
+npm run watch       # rebuild as you edit (into .build/, which git ignores)
 npm run demo        # try it on a made-up repo at http://localhost:4848
-npm run check       # what CI runs: types, dist/ matching src/, and the smoke test
+npm run check       # what CI runs: types, then a fresh build and the smoke test
 ```
 
 The demo runs on its own made-up repo, home folder and stand-ins for `gh` and `coderabbit`, so
@@ -30,9 +30,9 @@ it never touches your own repos or accounts.
 
 ### Things to know
 
-- **Edit `src/`, never `dist/` by hand.** `dist/` is committed, because a Claude Code plugin is
-  installed straight from the repo with no build step. Run `npm run build` and commit the result
-  with your change; CI fails if `dist/` doesn't match `src/`.
+- **Edit `src/`, and leave `dist/` out of your PR.** `dist/` is the build that plugin installs run
+  (they have no build step), so it's committed, but CI rebuilds and commits it after every merge.
+  The scripts above build into `.build/` instead, and a PR that changes `dist/` fails its check.
 - **Strict TypeScript, no runtime dependencies.** The server uses Node built-ins and shells out to
   `git`, `gh` and `coderabbit`; the page is plain DOM code. Request and response shapes live in
   `src/shared/api.ts`, used by both sides.
@@ -49,6 +49,14 @@ it never touches your own repos or accounts.
 - CI must pass, and a maintainer reviews every PR before it's merged.
 - PRs are squash-merged, so the PR title becomes the commit message: write it as a short,
   imperative summary ("Show blame for unchanged lines").
+
+## Releasing (maintainers)
+
+1. Bump `version` in `.claude-plugin/plugin.json` and `package.json`, and merge that to `main`.
+2. Wait for the build workflow to commit the rebuilt `dist/`.
+3. Tag that commit and push the tag: `git tag v2.1.0 && git push origin v2.1.0`. The release workflow
+   checks that the tag matches the version and `dist/` matches `src/`, runs the tests, and publishes
+   a GitHub Release with notes. Running dashboards pick up the new version on the next session start.
 
 By contributing, you agree that your contributions are licensed under the [MIT License](LICENSE)
 and that you'll follow the [Code of Conduct](CODE_OF_CONDUCT.md).

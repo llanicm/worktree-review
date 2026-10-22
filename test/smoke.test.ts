@@ -131,6 +131,21 @@ test('diffs: full, by commit, blame', async () => {
   assert.equal(missing.status, 404);
 });
 
+test('pushing a branch (its base moving) updates the diff', async () => {
+  const wt = await wtBy('feat/search-filters');
+  assert.equal(wt.ahead, 2);
+  const before = execFileSync('git', ['rev-parse', 'refs/remotes/origin/main'], { cwd: repo, encoding: 'utf8' }).trim();
+  const head = execFileSync('git', ['rev-parse', 'feat/search-filters'], { cwd: repo, encoding: 'utf8' }).trim();
+  execFileSync('git', ['update-ref', 'refs/remotes/origin/main', head], { cwd: repo });
+  try {
+    await until(async () => (await wtBy('feat/search-filters')).ahead === 0, 'the diff to notice origin/main moved');
+    assert.equal((await get(`/api/worktrees/${wt.id}/diff?mode=full`)).diff, '');
+  } finally {
+    execFileSync('git', ['update-ref', 'refs/remotes/origin/main', before], { cwd: repo });
+    await until(async () => (await wtBy('feat/search-filters')).ahead === 2, 'origin/main to be put back');
+  }
+});
+
 test('reviewed marks and since-last-review', async () => {
   const wt = await wtBy('feat/search-filters');
   const full = await get(`/api/worktrees/${wt.id}/diff?mode=full`);
