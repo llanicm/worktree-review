@@ -299,6 +299,8 @@ test('the page renders a worktree without errors', { skip: !fs.existsSync(proces
     });
     assert.ok(rows > 20, `rendered ${rows} diff rows`);
     assert.ok(await page.waitFor("document.querySelectorAll('.cr-finding').length"), 'CodeRabbit findings shown inline');
+    // highlight.js comes from cdnjs, pinned by an integrity hash; a mismatch would leave the code unhighlighted.
+    assert.ok(await page.waitFor("document.querySelector('td.code [class^=hljs-]')"), 'syntax highlighting loaded');
     assert.ok(await page.waitFor("document.querySelectorAll('.cbar, [class*=commit-c]').length || document.querySelectorAll('tr.line td').length"));
     // Blame: switch it on for one file, check the column, switch it off.
     await page.eval(`[...document.querySelectorAll('section.file')].find((s) => s.querySelector('.file-name')?.getAttribute('title') === 'src/checkout.ts').querySelector('[data-act=blame-file]').click()`);
