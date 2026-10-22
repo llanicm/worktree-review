@@ -210,6 +210,11 @@ path if it isn't in the usual macOS place.
 When you change the plugin, run `npm run build`, commit `dist/` with your change, and bump `version`
 in `.claude-plugin/plugin.json`, so running dashboards are replaced on the next session start.
 
+## Contributing
+
+Contributions are welcome through pull requests; see [CONTRIBUTING.md](CONTRIBUTING.md). Report
+security problems privately, as described in [SECURITY.md](SECURITY.md).
+
 ## License
 
 [MIT](LICENSE)
