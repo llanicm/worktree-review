@@ -1,5 +1,5 @@
 // ---------- diff files, line comments ----------
-import type { Comment, Finding } from '../shared/api.ts';
+import type { Comment, FileBlame, Finding } from '../shared/api.ts';
 import { findingHtml } from './coderabbit.ts';
 import { hl, keyOf, langFor, sameCommit } from './diff.ts';
 import { curWt, S, view } from './state.ts';
@@ -136,6 +136,7 @@ export function renderFile(f: ViewFile, byAnchor: Map<string, Comment[]>) {
     <span class="stat-add">+${f.add}</span><span class="stat-del">−${f.del}</span>
     ${collapsed && nOpen ? `<span class="chip comments" title="Expand to see them">${nOpen} comment${nOpen === 1 ? '' : 's'}</span>` : ''}
     ${f.status !== 'deleted' && wt && editorLink(wt.path) ? `<a class="file-tag" href="${esc(editorLink(`${wt.path}/${f.path}`, firstLine))}" title="Open in ${editorName()}">open</a>` : ''}
+    ${blameButtonHtml(f, collapsed)}
     ${f.commit ? '' : `<label class="viewed-box ${viewed ? 'on' : ''}"><input type="checkbox" data-act="viewed" data-file="${esc(f.path)}" ${viewed ? 'checked' : ''}> Viewed</label>`}
   </div>`;
   if (kind === 'collapsed') body = '';
@@ -160,8 +161,12 @@ export function rowsHtml(f: ViewFile, byAnchor: Map<string, Comment[]>) {
   const v = view();
   const lang = langFor(f.path);
   const rows: string[] = [];
+  const fb = fileBlameOf(f);
+  const span = fb ? 4 : 3;
+  let lastSha: string | null = null;
   for (const h of f.hunks) {
-    rows.push(`<tr class="hunk"><td colspan="3">${esc(h.header)}</td></tr>`);
+    rows.push(`<tr class="hunk"><td colspan="${span}">${esc(h.header)}</td></tr>`);
+    lastSha = null;
     for (const l of h.lines) {
       const side = l.t === 'del' ? 'old' : 'new';
       const line = l.t === 'del' ? l.o : l.n;
@@ -170,19 +175,69 @@ export function rowsHtml(f: ViewFile, byAnchor: Map<string, Comment[]>) {
       const cn = !f.commit && l.t === 'add' ? commitOfLine(f.path, l.n) : undefined;
       const cAttr = cn !== undefined ? ` data-c="${cn}"` : '';
       const cBar = cn !== undefined ? cbarHtml(cn) : '';
-      rows.push(`<tr class="line ${l.t}" data-k="${esc(k)}"${cAttr}><td class="num" data-act="new-comment" data-k="${esc(k)}">${l.o ?? ''}</td><td class="num" data-act="new-comment" data-k="${esc(k)}">${l.n ?? ''}</td><td class="code">${cBar}<button class="add-c" data-act="new-comment" data-k="${esc(k)}" title="Comment on this line">+</button><span class="sign">${sign}</span>${hl(l.text, lang)}</td></tr>`);
+      let blameCell = '';
+      if (fb) {
+        const sha = l.t === 'del' ? null : shaAt(fb, l.n);
+        blameCell = blameCellHtml(fb, sha, sha !== lastSha);
+        lastSha = sha;
+      }
+      rows.push(`<tr class="line ${l.t}" data-k="${esc(k)}"${cAttr}>${blameCell}<td class="num" data-act="new-comment" data-k="${esc(k)}">${l.o ?? ''}</td><td class="num" data-act="new-comment" data-k="${esc(k)}">${l.n ?? ''}</td><td class="code">${cBar}<button class="add-c" data-act="new-comment" data-k="${esc(k)}" title="Comment on this line">+</button><span class="sign">${sign}</span>${hl(l.text, lang)}</td></tr>`);
       const crHere: Finding[] = side === 'new' ? (v.crByAnchor?.get(k) || []) : [];
       const threads = (byAnchor.get(k) || []);
       const ek = `new:${k}`;
       if (threads.length || crHere.length || S.editors.has(ek)) {
-        rows.push(`<tr class="thread-row"><td colspan="3"><div class="threads">${crHere.map((f) => findingHtml(f, true)).join('')}${threads.map(threadHtml).join('')}${S.editors.has(ek) ? editorHtml(ek, 'Add comment') : ''}</div></td></tr>`);
+        rows.push(`<tr class="thread-row"><td colspan="${span}"><div class="threads">${crHere.map((f) => findingHtml(f, true)).join('')}${threads.map(threadHtml).join('')}${S.editors.has(ek) ? editorHtml(ek, 'Add comment') : ''}</div></td></tr>`);
       }
     }
   }
-  return `<table class="diff"><colgroup><col class="num"><col class="num"><col></colgroup>${rows.join('')}</table>`;
+  return `<table class="diff${fb ? ' blamed' : ''}"><colgroup>${fb ? '<col class="blame">' : ''}<col class="num"><col class="num"><col></colgroup>${rows.join('')}</table>`;
 }
 
 /** The commit bar on an added line (blame), shared by the full render and the in-place blame patch. */
 export function cbarHtml(cn: number) {
   return `<span class="cbar ${commitClass(cn)}" title="${esc(cn ? `#${cn} ${commitByN(cn)?.sha.slice(0, 8)} ${commitByN(cn)?.subject || ''}` : 'Not committed yet')}"></span>`;
+}
+
+// ---------- Blame column ----------
+// Full-history blame of a file as it is in the worktree, switched on per file from its header. Branch commits
+// keep their colour and number; lines from before the branch are muted; removed lines have no blame.
+
+const UNCOMMITTED = '0'.repeat(40);
+
+export const blameKey = (f: ViewFile) => `${view().diff.fingerprint}:${f.path}`;
+
+/** The loaded blame for a file showing its Blame column, if any. */
+function fileBlameOf(f: ViewFile): FileBlame | undefined {
+  if (f.commit || !S.blameOn.has(f.uid)) return undefined;
+  return S.fileBlame.get(blameKey(f));
+}
+
+function blameButtonHtml(f: ViewFile, collapsed: boolean) {
+  if (f.commit || collapsed || f.status === 'deleted' || f.binary) return '';
+  const on = S.blameOn.has(f.uid);
+  return `<button class="file-tag blame-btn ${on ? 'on' : ''}" data-act="blame-file" data-file="${esc(f.uid)}" aria-pressed="${on}" title="${on ? 'Hide' : 'Show'} who last changed each line">Blame</button>`;
+}
+
+function shaAt(fb: FileBlame, line: number | undefined): string | null {
+  if (line === undefined) return null;
+  let lo = 0, hi = fb.runs.length - 1;
+  while (lo <= hi) {
+    const mid = (lo + hi) >> 1;
+    const r = fb.runs[mid];
+    if (!r) break;
+    if (line < r[0]) hi = mid - 1; else if (line > r[1]) lo = mid + 1; else return r[2];
+  }
+  return null;
+}
+
+function blameCellHtml(fb: FileBlame, sha: string | null, first: boolean) {
+  const c = sha ? fb.commits[sha] : undefined;
+  if (!c) return '<td class="blame"></td>';
+  const cls = c.n === null ? 'old' : commitClass(c.n);
+  const uncommitted = c.sha === UNCOMMITTED;
+  const title = uncommitted ? 'Not committed yet' : `${c.summary}\n${c.author}, ${new Date(c.time).toLocaleString()}\n${c.sha}`;
+  const act = c.n ? ` data-act="hl-commit" data-n="${c.n}"` : '';
+  const label = !first ? '' : uncommitted ? '<span class="b-who">Not committed yet</span>'
+    : `${c.n ? `<span class="b-num">#${c.n}</span>` : ''}<span class="b-sha">${c.sha.slice(0, 7)}</span><span class="b-who">${esc(c.author)}</span><span class="b-when">${ago(c.time)}</span>`;
+  return `<td class="blame ${cls}${first ? ' start' : ''}" title="${esc(title)}"${act}>${label}</td>`;
 }

@@ -1,6 +1,6 @@
 // Client-only types: what app.js derives from the API responses in src/shared/api.ts.
 import type {
-  BlameResponse, CodeRabbitReview, Comment, DiffResponse, DirListing, Finding, Integrations, PublicState, Review, ReviewStatus,
+  BlameResponse, CodeRabbitReview, FileBlame, Comment, DiffResponse, DirListing, Finding, Integrations, PublicState, Review, ReviewStatus,
 } from '../shared/api.ts';
 
 // ---------- parsed diffs ----------
@@ -109,6 +109,8 @@ export interface State {
   page: Page | null;
   cleanSel: Map<string, boolean>;  // clean-up page: worktree id -> ticked
   shutCommits: Set<number>;        // collapsed commit sections in By commit view
+  blameOn: Set<string>;            // file uids showing the Blame column
+  fileBlame: Map<string, FileBlame>; // `${fingerprint}:${path}` -> full-history blame
   openBodies: Set<number>;         // commit messages expanded past the clamp
   removeErrors: Record<string, string>; // wtId -> why the last removal failed
   seenJobs: Set<string>;           // finished jobs already handled

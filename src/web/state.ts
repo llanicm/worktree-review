@@ -21,6 +21,8 @@ export const S: State = {
   page: null,
   cleanSel: new Map(),
   shutCommits: new Set(),
+  blameOn: new Set(),
+  fileBlame: new Map(),
   openBodies: new Set(),
   removeErrors: {},
   seenJobs: new Set(),

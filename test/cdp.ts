@@ -19,7 +19,7 @@ export interface Page {
 export async function openPage(url: string, { width = 1440, height = 900, scale = 1 } = {}): Promise<Page> {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'wtr-chrome-'));
   const port = 9300 + (process.pid % 500);
-  const chrome = spawn(CHROME, ['--headless=new', '--disable-gpu', '--hide-scrollbars', `--user-data-dir=${profile}`, `--remote-debugging-port=${port}`, 'about:blank'], { stdio: 'ignore' });
+  const chrome = spawn(CHROME, ['--headless=new', '--disable-gpu', '--hide-scrollbars', ...(process.env.CI ? ['--no-sandbox'] : []), `--user-data-dir=${profile}`, `--remote-debugging-port=${port}`, 'about:blank'], { stdio: 'ignore' });
   let target: { webSocketDebuggerUrl: string } | undefined;
   for (let i = 0; i < 50 && !target; i++) {
     await sleep(200);

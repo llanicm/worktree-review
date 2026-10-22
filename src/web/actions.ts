@@ -1,11 +1,11 @@
 // ---------- actions (data-act event delegation) ----------
-import type { CodeRabbitReview, Integrations, RepairResult } from '../shared/api.ts';
+import type { CodeRabbitReview, FileBlame, Integrations, RepairResult } from '../shared/api.ts';
 import { fillFile } from './lazy.ts';
 import { indexFindings, loadCodeRabbit } from './coderabbit.ts';
-import { collapseAll, expandAll, toggleBody, toggleCommit, toggleFile } from './collapse.ts';
+import { collapseAll, expandAll, redrawFile, toggleBody, toggleCommit, toggleFile } from './collapse.ts';
 import { cleanPicked, cleanupGroups } from './cleanup.ts';
 import { keyOf, parseKey, sameCommit } from './diff.ts';
-import { fileCommitsOf, isCollapsed } from './file.ts';
+import { blameKey, fileCommitsOf, isCollapsed } from './file.ts';
 import { loadView, reloadComments } from './loading.ts';
 import { closePicker, openPicker } from './picker.ts';
 import { closeResult, showResult } from './result.ts';
@@ -66,6 +66,27 @@ export const actions: Record<string, Action> = {
   delete: async (el) => { await api('DELETE', `/api/comments/${attr(el, 'id')}`); await reloadComments(); },
   resolve: async (el) => { await api('POST', `/api/comments/${attr(el, 'id')}/resolve`, { author: 'you' }); await reloadComments(); },
   reopen: async (el) => { await api('POST', `/api/comments/${attr(el, 'id')}/reopen`); await reloadComments(); },
+  'blame-file': async (el) => {
+    const v = view();
+    const f = v.files.find((x) => x.uid === attr(el, 'file'));
+    if (!f) return;
+    if (S.blameOn.has(f.uid)) { S.blameOn.delete(f.uid); redrawFile(f); return; }
+    const key = blameKey(f);
+    if (!S.fileBlame.has(key)) {
+      (el as HTMLButtonElement).disabled = true;
+      el.textContent = 'Blame…';
+      try {
+        S.fileBlame.set(key, await api<FileBlame>('GET', `/api/worktrees/${v.wtId}/blame/file?path=${encodeURIComponent(f.path)}`));
+      } catch (e) {
+        toast(errMsg(e), true);
+        redrawFile(f);
+        return;
+      }
+      if (S.view !== v) return;
+    }
+    S.blameOn.add(f.uid);
+    redrawFile(f);
+  },
   'toggle-file': (el) => {
     const f = view().files.find((x) => x.uid === attr(el, 'file'));
     if (f) toggleFile(f);

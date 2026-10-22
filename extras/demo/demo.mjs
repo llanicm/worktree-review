@@ -309,6 +309,8 @@ const prs = {
 for (const pr of Object.values(prs)) pr.url = `https://github.com/acme/shop/pull/${pr.number}`;
 fs.writeFileSync(path.join(BIN, 'prs.json'), JSON.stringify(prs));
 
+// The stand-ins are CommonJS scripts; keep the repo's "type": "module" from applying when the demo folder is inside it.
+fs.writeFileSync(path.join(BIN, 'package.json'), '{ "type": "commonjs" }\n');
 const shim = (name, body) => {
   const p = path.join(BIN, name);
   fs.writeFileSync(p, `#!/usr/bin/env node\nconst args = process.argv.slice(2);\nconst out = (o) => console.log(typeof o === 'string' ? o : JSON.stringify(o));\n(async () => {\n${body}\n})();\n`);

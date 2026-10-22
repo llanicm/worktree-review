@@ -91,6 +91,11 @@ function patchGroups(groups: CommitGroup[], byAnchor: ByAnchor) {
   return true;
 }
 
+/** Redraws one file in place, e.g. after its Blame column is switched on or off. */
+export function redrawFile(f: ViewFile) {
+  patch((_page, _v, byAnchor) => patchFiles([f], byAnchor));
+}
+
 export function toggleFile(f: ViewFile) {
   S.toggled.set(f.uid, !isCollapsed(f));
   patch((_page, _v, byAnchor) => patchFiles([f], byAnchor));

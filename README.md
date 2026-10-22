@@ -30,6 +30,8 @@ when a session finishes work you haven't looked at.
 The diff covers the branch's commits plus anything uncommitted or untracked. It's taken against the
 PR's base, the branch it's stacked on, or `origin/main`, and you can change the base. Mark a worktree
 as reviewed and **Since last review** shows only what changed after that. Tick files off as viewed.
+It stays quick on big branches: only the part of the diff near the screen is drawn, and the rest
+fills in as you scroll or while the page is idle.
 
 ### See the order it happened in
 
@@ -39,6 +41,14 @@ introduced it. Click a commit to highlight its lines. **By commit** replays the 
 a time, with each commit's full message, and ends with the uncommitted changes.
 
 ![By commit view: each commit as its own section with its message and changes](docs/screenshots/by-commit.png)
+
+### Blame any file
+
+Switch on **Blame** in a file's header to see who last changed each line and when, across the
+file's whole history, uncommitted edits included. Lines from this branch's commits keep their
+number and colour, and clicking one highlights everything from that commit.
+
+![The Blame column on a file](docs/screenshots/blame.png)
 
 ### Comments go back to Claude
 
@@ -164,33 +174,39 @@ clone this repo and run `extras/install-service.sh`. `extras/uninstall-service.s
 
 ## Development
 
-The server is a single Node file with no dependencies (`server/server.mjs`) that shells out to `git`,
-`gh` and `coderabbit`. The page is plain HTML, CSS and JavaScript in `server/public/`.
+Worktree Review is strict TypeScript with no runtime dependencies. The server shells out to `git`,
+`gh` and `coderabbit`; the page is plain DOM code with no framework. `build.mjs` compiles `src/` with
+esbuild into `dist/`, and `dist/` is committed, because a Claude Code plugin is installed straight
+from the repo with no build step. Running it needs Node 18+; developing it needs Node 22.18+, which
+runs the TypeScript tests directly.
 
 | Path | |
 |---|---|
-| `server/server.mjs` | The server: worktree discovery, diffs, comments, PRs, cleanup, CodeRabbit |
-| `server/public/` | The page. `sse-worker.js` shares one live connection across tabs, because browsers cap connections per host |
-| `scripts/hook.mjs` | Hands submitted reviews to the right session (`UserPromptSubmit` and `Stop` hooks) |
-| `scripts/ensure-server.mjs` | Starts or upgrades the server (`SessionStart` hook and `/worktree-review:open`) |
-| `extras/demo/` | A self-contained demo and the README screenshots |
-
-To try it without touching your own repos, run the demo. It builds a made-up repo with worktrees,
-Claude sessions, PRs and a CodeRabbit review in `.demo/`, with its own home folder and stand-ins for
-`gh` and `coderabbit`, and serves it on port 4848:
+| `src/server/` | The server: worktree discovery, sessions, diffs and blame, comments and hook delivery, PRs and cleanup, CodeRabbit, settings. `main.ts` is the entry point |
+| `src/web/` | The page. `lazy.ts` draws only the diff near the screen; `collapse.ts` updates collapsed sections in place. `worker/sse-worker.ts` shares one live connection across tabs, because browsers cap connections per host |
+| `src/shared/api.ts` | Types for every API request and response, used by both sides, so a change to one breaks the compile on the other |
+| `src/scripts/` | `hook.ts` hands submitted reviews to the right session; `ensure-server.ts` starts or upgrades the server |
+| `dist/` | The build that runs (committed) |
+| `test/` | `smoke.test.ts` checks every route, the removal rules, hook delivery, the security checks and the page in Chrome, against the demo. `bench.ts` measures it on a large worktree |
+| `extras/demo/` | A self-contained demo, and the script that takes the README screenshots |
 
 ```sh
-node extras/demo/demo.mjs
-open http://localhost:4848
+npm install
+npm run watch       # rebuild dist/ as you edit
+npm run demo        # try it on a made-up repo at http://localhost:4848 (prints how to stop it)
+npm test            # build, then the smoke test
+npm run check       # types, dist/ matching src/, and the smoke test (what CI runs)
+npm run bench       # timings on a large worktree
 ```
 
-It prints the command to stop it when you're done.
+The demo builds a made-up repo with worktrees, Claude sessions, PRs and a CodeRabbit review in
+`.demo/`, with its own home folder and stand-ins for `gh` and `coderabbit`, so it never touches your
+own repos or accounts. To refresh the screenshots, run `node extras/demo/screenshots.mjs` while the
+demo is up. The page check, the benchmark and the screenshots need Google Chrome; set `CHROME` to its
+path if it isn't in the usual macOS place.
 
-To refresh the screenshots, run `node extras/demo/screenshots.mjs` while the demo is up. It needs
-Google Chrome; set `CHROME` to its path if it isn't in the usual macOS place.
-
-When you change the plugin, bump `version` in `.claude-plugin/plugin.json`, so running dashboards
-are replaced on the next session start.
+When you change the plugin, run `npm run build`, commit `dist/` with your change, and bump `version`
+in `.claude-plugin/plugin.json`, so running dashboards are replaced on the next session start.
 
 ## License
 

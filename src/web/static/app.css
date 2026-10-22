@@ -565,3 +565,16 @@ td.code .cbar { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; back
 
 /* Off-screen files skip layout and paint; the browser remembers each one's last size. */
 section.file { content-visibility: auto; contain-intrinsic-size: auto 400px; }
+
+/* Blame column */
+.blame-btn { cursor: pointer; font: inherit; font-size: 11px; }
+.blame-btn.on { background: var(--accent-soft, var(--bg-soft)); border-color: var(--accent, var(--border)); color: var(--fg); }
+table.diff col.blame { width: 230px; }
+td.blame { font-size: 11px; color: var(--fg-muted); background: var(--bg-soft); border-left: 3px solid var(--c, transparent); padding: 0 6px !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+td.blame.old { --c: transparent; opacity: .75; }
+td.blame.start { border-top: 1px solid var(--border); }
+td.blame[data-act] { cursor: pointer; }
+td.blame .b-num { color: var(--c); font-weight: 600; margin-right: 6px; }
+td.blame .b-sha { font-family: var(--mono); margin-right: 6px; }
+td.blame .b-who { margin-right: 6px; color: var(--fg); }
+@media (max-width: 900px) { table.diff col.blame { width: 120px; } td.blame .b-sha, td.blame .b-when { display: none; } }

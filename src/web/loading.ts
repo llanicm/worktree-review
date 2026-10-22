@@ -1,6 +1,8 @@
 // ---------- loading & routing ----------
-import type { BlameResponse, CommentsResponse, DiffResponse } from '../shared/api.ts';
+import type { BlameResponse, CommentsResponse, DiffResponse, FileBlame } from '../shared/api.ts';
 import { loadCodeRabbit } from './coderabbit.ts';
+import { redrawFile } from './collapse.ts';
+import { blameKey } from './file.ts';
 import { parseDiff } from './diff.ts';
 import { headerHtml } from './header.ts';
 import { loadIntegrations, setupSig } from './setup.ts';
@@ -49,6 +51,7 @@ export async function loadView({ quiet = false } = {}) {
     if (seq !== S.seq) return;
     S.stale = false;
     renderMain();
+    refreshFileBlames(v);
   } catch (e) {
     if (seq !== S.seq) return;
     if (!quiet) need('#main').innerHTML = `<div class="page">${headerHtml(wt)}<div class="callout warn">${esc(errMsg(e))}</div></div>`;
@@ -96,4 +99,16 @@ export function onHash() {
   }
   S.page = null;
   if (id) select(id); else { S.selId = null; renderSidebar(); renderMain(); }
+}
+
+// Files with their Blame column on keep it when the worktree changes: fetch the new blame and redraw them.
+function refreshFileBlames(v: View) {
+  for (const f of v.files) {
+    if (!S.blameOn.has(f.uid) || f.commit || S.fileBlame.has(blameKey(f))) continue;
+    const key = blameKey(f);
+    api<FileBlame>('GET', `/api/worktrees/${v.wtId}/blame/file?path=${encodeURIComponent(f.path)}`).then((b) => {
+      S.fileBlame.set(key, b);
+      if (S.view === v) redrawFile(f);
+    }, () => { S.blameOn.delete(f.uid); if (S.view === v) redrawFile(f); });
+  }
 }

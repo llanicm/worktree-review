@@ -20,6 +20,8 @@ var S = {
   page: null,
   cleanSel: /* @__PURE__ */ new Map(),
   shutCommits: /* @__PURE__ */ new Set(),
+  blameOn: /* @__PURE__ */ new Set(),
+  fileBlame: /* @__PURE__ */ new Map(),
   openBodies: /* @__PURE__ */ new Set(),
   removeErrors: {},
   seenJobs: /* @__PURE__ */ new Set(),
@@ -421,6 +423,7 @@ function renderFile(f, byAnchor2) {
     <span class="stat-add">+${f.add}</span><span class="stat-del">−${f.del}</span>
     ${collapsed && nOpen ? `<span class="chip comments" title="Expand to see them">${nOpen} comment${nOpen === 1 ? "" : "s"}</span>` : ""}
     ${f.status !== "deleted" && wt && editorLink(wt.path) ? `<a class="file-tag" href="${esc(editorLink(`${wt.path}/${f.path}`, firstLine))}" title="Open in ${editorName()}">open</a>` : ""}
+    ${blameButtonHtml(f, collapsed)}
     ${f.commit ? "" : `<label class="viewed-box ${viewed ? "on" : ""}"><input type="checkbox" data-act="viewed" data-file="${esc(f.path)}" ${viewed ? "checked" : ""}> Viewed</label>`}
   </div>`;
   if (kind === "collapsed") body = "";
@@ -442,8 +445,12 @@ function rowsHtml(f, byAnchor2) {
   const v = view();
   const lang = langFor(f.path);
   const rows = [];
+  const fb = fileBlameOf(f);
+  const span = fb ? 4 : 3;
+  let lastSha = null;
   for (const h of f.hunks) {
-    rows.push(`<tr class="hunk"><td colspan="3">${esc(h.header)}</td></tr>`);
+    rows.push(`<tr class="hunk"><td colspan="${span}">${esc(h.header)}</td></tr>`);
+    lastSha = null;
     for (const l of h.lines) {
       const side = l.t === "del" ? "old" : "new";
       const line = l.t === "del" ? l.o : l.n;
@@ -452,19 +459,61 @@ function rowsHtml(f, byAnchor2) {
       const cn = !f.commit && l.t === "add" ? commitOfLine(f.path, l.n) : void 0;
       const cAttr = cn !== void 0 ? ` data-c="${cn}"` : "";
       const cBar = cn !== void 0 ? cbarHtml(cn) : "";
-      rows.push(`<tr class="line ${l.t}" data-k="${esc(k)}"${cAttr}><td class="num" data-act="new-comment" data-k="${esc(k)}">${l.o ?? ""}</td><td class="num" data-act="new-comment" data-k="${esc(k)}">${l.n ?? ""}</td><td class="code">${cBar}<button class="add-c" data-act="new-comment" data-k="${esc(k)}" title="Comment on this line">+</button><span class="sign">${sign}</span>${hl(l.text, lang)}</td></tr>`);
+      let blameCell = "";
+      if (fb) {
+        const sha = l.t === "del" ? null : shaAt(fb, l.n);
+        blameCell = blameCellHtml(fb, sha, sha !== lastSha);
+        lastSha = sha;
+      }
+      rows.push(`<tr class="line ${l.t}" data-k="${esc(k)}"${cAttr}>${blameCell}<td class="num" data-act="new-comment" data-k="${esc(k)}">${l.o ?? ""}</td><td class="num" data-act="new-comment" data-k="${esc(k)}">${l.n ?? ""}</td><td class="code">${cBar}<button class="add-c" data-act="new-comment" data-k="${esc(k)}" title="Comment on this line">+</button><span class="sign">${sign}</span>${hl(l.text, lang)}</td></tr>`);
       const crHere = side === "new" ? v.crByAnchor?.get(k) || [] : [];
       const threads = byAnchor2.get(k) || [];
       const ek = `new:${k}`;
       if (threads.length || crHere.length || S.editors.has(ek)) {
-        rows.push(`<tr class="thread-row"><td colspan="3"><div class="threads">${crHere.map((f2) => findingHtml(f2, true)).join("")}${threads.map(threadHtml).join("")}${S.editors.has(ek) ? editorHtml(ek, "Add comment") : ""}</div></td></tr>`);
+        rows.push(`<tr class="thread-row"><td colspan="${span}"><div class="threads">${crHere.map((f2) => findingHtml(f2, true)).join("")}${threads.map(threadHtml).join("")}${S.editors.has(ek) ? editorHtml(ek, "Add comment") : ""}</div></td></tr>`);
       }
     }
   }
-  return `<table class="diff"><colgroup><col class="num"><col class="num"><col></colgroup>${rows.join("")}</table>`;
+  return `<table class="diff${fb ? " blamed" : ""}"><colgroup>${fb ? '<col class="blame">' : ""}<col class="num"><col class="num"><col></colgroup>${rows.join("")}</table>`;
 }
 function cbarHtml(cn) {
   return `<span class="cbar ${commitClass(cn)}" title="${esc(cn ? `#${cn} ${commitByN(cn)?.sha.slice(0, 8)} ${commitByN(cn)?.subject || ""}` : "Not committed yet")}"></span>`;
+}
+var UNCOMMITTED = "0".repeat(40);
+var blameKey = (f) => `${view().diff.fingerprint}:${f.path}`;
+function fileBlameOf(f) {
+  if (f.commit || !S.blameOn.has(f.uid)) return void 0;
+  return S.fileBlame.get(blameKey(f));
+}
+function blameButtonHtml(f, collapsed) {
+  if (f.commit || collapsed || f.status === "deleted" || f.binary) return "";
+  const on = S.blameOn.has(f.uid);
+  return `<button class="file-tag blame-btn ${on ? "on" : ""}" data-act="blame-file" data-file="${esc(f.uid)}" aria-pressed="${on}" title="${on ? "Hide" : "Show"} who last changed each line">Blame</button>`;
+}
+function shaAt(fb, line) {
+  if (line === void 0) return null;
+  let lo = 0, hi = fb.runs.length - 1;
+  while (lo <= hi) {
+    const mid = lo + hi >> 1;
+    const r = fb.runs[mid];
+    if (!r) break;
+    if (line < r[0]) hi = mid - 1;
+    else if (line > r[1]) lo = mid + 1;
+    else return r[2];
+  }
+  return null;
+}
+function blameCellHtml(fb, sha, first) {
+  const c = sha ? fb.commits[sha] : void 0;
+  if (!c) return '<td class="blame"></td>';
+  const cls = c.n === null ? "old" : commitClass(c.n);
+  const uncommitted = c.sha === UNCOMMITTED;
+  const title = uncommitted ? "Not committed yet" : `${c.summary}
+${c.author}, ${new Date(c.time).toLocaleString()}
+${c.sha}`;
+  const act = c.n ? ` data-act="hl-commit" data-n="${c.n}"` : "";
+  const label = !first ? "" : uncommitted ? '<span class="b-who">Not committed yet</span>' : `${c.n ? `<span class="b-num">#${c.n}</span>` : ""}<span class="b-sha">${c.sha.slice(0, 7)}</span><span class="b-who">${esc(c.author)}</span><span class="b-when">${ago(c.time)}</span>`;
+  return `<td class="blame ${cls}${first ? " start" : ""}" title="${esc(title)}"${act}>${label}</td>`;
 }
 
 // src/web/lazy.ts
@@ -1204,6 +1253,9 @@ function patchGroups(groups, byAnchor2) {
   }
   return true;
 }
+function redrawFile(f) {
+  patch((_page, _v, byAnchor2) => patchFiles([f], byAnchor2));
+}
 function toggleFile(f) {
   S.toggled.set(f.uid, !isCollapsed(f));
   patch((_page, _v, byAnchor2) => patchFiles([f], byAnchor2));
@@ -1286,6 +1338,7 @@ async function loadView({ quiet = false } = {}) {
     if (seq !== S.seq) return;
     S.stale = false;
     renderMain();
+    refreshFileBlames(v);
   } catch (e) {
     if (seq !== S.seq) return;
     if (!quiet) need("#main").innerHTML = `<div class="page">${headerHtml(wt)}<div class="callout warn">${esc(errMsg(e))}</div></div>`;
@@ -1333,6 +1386,19 @@ function onHash() {
     S.selId = null;
     renderSidebar();
     renderMain();
+  }
+}
+function refreshFileBlames(v) {
+  for (const f of v.files) {
+    if (!S.blameOn.has(f.uid) || f.commit || S.fileBlame.has(blameKey(f))) continue;
+    const key = blameKey(f);
+    api("GET", `/api/worktrees/${v.wtId}/blame/file?path=${encodeURIComponent(f.path)}`).then((b) => {
+      S.fileBlame.set(key, b);
+      if (S.view === v) redrawFile(f);
+    }, () => {
+      S.blameOn.delete(f.uid);
+      if (S.view === v) redrawFile(f);
+    });
   }
 }
 
@@ -1495,6 +1561,31 @@ var actions = {
   reopen: async (el) => {
     await api("POST", `/api/comments/${attr(el, "id")}/reopen`);
     await reloadComments();
+  },
+  "blame-file": async (el) => {
+    const v = view();
+    const f = v.files.find((x) => x.uid === attr(el, "file"));
+    if (!f) return;
+    if (S.blameOn.has(f.uid)) {
+      S.blameOn.delete(f.uid);
+      redrawFile(f);
+      return;
+    }
+    const key = blameKey(f);
+    if (!S.fileBlame.has(key)) {
+      el.disabled = true;
+      el.textContent = "Blame…";
+      try {
+        S.fileBlame.set(key, await api("GET", `/api/worktrees/${v.wtId}/blame/file?path=${encodeURIComponent(f.path)}`));
+      } catch (e) {
+        toast(errMsg(e), true);
+        redrawFile(f);
+        return;
+      }
+      if (S.view !== v) return;
+    }
+    S.blameOn.add(f.uid);
+    redrawFile(f);
   },
   "toggle-file": (el) => {
     const f = view().files.find((x) => x.uid === attr(el, "file"));

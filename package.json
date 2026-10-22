@@ -4,18 +4,22 @@
   "type": "module",
   "description": "A local, GitHub-style review screen for the git worktrees Claude Code is working in.",
   "license": "MIT",
-  "engines": { "node": ">=18" },
+  "engines": {
+    "node": ">=18"
+  },
   "scripts": {
     "build": "node build.mjs",
     "watch": "node build.mjs --watch",
     "typecheck": "tsc -p src/server && tsc -p src/web && tsc -p src/web/worker && tsc -p test",
-    "test": "npm run build && node --test --test-reporter=spec test/",
-    "check": "npm run typecheck && node build.mjs --check && node --test test/",
-    "demo": "npm run build && node extras/demo/demo.mjs"
+    "test": "npm run build && node --test --test-reporter=spec test/*.test.ts",
+    "check": "npm run typecheck && node build.mjs --check && node --test test/*.test.ts",
+    "demo": "npm run build && node extras/demo/demo.mjs",
+    "bench": "node test/bench.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "esbuild": "^0.25.0",
     "typescript": "^5.7.0"
-  }
+  },
+  "version": "2.0.0"
 }

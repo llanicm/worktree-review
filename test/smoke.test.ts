@@ -285,6 +285,14 @@ test('the page renders a worktree without errors', { skip: !fs.existsSync(proces
     assert.ok(rows > 20, `rendered ${rows} diff rows`);
     assert.ok(await page.waitFor("document.querySelectorAll('.cr-finding').length"), 'CodeRabbit findings shown inline');
     assert.ok(await page.waitFor("document.querySelectorAll('.cbar, [class*=commit-c]').length || document.querySelectorAll('tr.line td').length"));
+    // Blame: switch it on for one file, check the column, switch it off.
+    await page.eval(`[...document.querySelectorAll('section.file')].find((s) => s.querySelector('.file-name')?.getAttribute('title') === 'src/checkout.ts').querySelector('[data-act=blame-file]').click()`);
+    const blameText = await page.waitFor<string>("[...document.querySelectorAll('td.blame.start')].map((td) => td.textContent).join(' | ')");
+    assert.match(blameText, /Sam Rivera/);
+    assert.match(blameText, /#2/);
+    assert.match(blameText, /Not committed yet/);
+    await page.eval("document.querySelector('.blame-btn.on').click()");
+    assert.ok(await page.waitFor("document.querySelectorAll('td.blame').length === 0"), 'blame switched off');
     await page.eval("document.querySelector('[data-act=mode][data-mode=commits]').click()");
     assert.ok(await page.waitFor("document.querySelectorAll('.commit-group').length >= 3"), 'a section per commit');
     for (const hash of ['#/cleanup', '#/settings']) {

@@ -26,6 +26,7 @@ const feature = id('feat/checkout-discounts');
 const SHOTS = [
   { name: 'overview', hash: `#/${feature}`, wait: 2500 },
   { name: 'coderabbit', hash: `#/${feature}`, scroll: '.cr-finding', clip: 'section.file:has(.cr-finding)' },
+  { name: 'blame', hash: `#/${feature}`, run: "[...document.querySelectorAll('section.file')].find((s) => s.querySelector('.file-name')?.getAttribute('title') === 'src/checkout.ts').querySelector('[data-act=blame-file]').click()", wait: 1500, clip: 'section.file:has(table.blamed)' },
   { name: 'by-commit', hash: `#/${feature}`, run: "document.querySelector('[data-act=mode][data-mode=commits]').click()", wait: 2000 },
   { name: 'merged', hash: `#/${id('refactor/api-client')}`, clip: '.callout.warn', pad: 16 },
   { name: 'cleanup', hash: '#/cleanup' },
