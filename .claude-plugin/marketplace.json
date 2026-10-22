@@ -1,0 +1,14 @@
+{
+  "name": "worktree-review",
+  "description": "Worktree Review: a local, GitHub-style review screen for the git worktrees Claude Code is working in.",
+  "owner": {
+    "name": "John McInall"
+  },
+  "plugins": [
+    {
+      "name": "worktree-review",
+      "source": "./",
+      "description": "A local, GitHub-style review screen for the git worktrees Claude is working in."
+    }
+  ]
+}

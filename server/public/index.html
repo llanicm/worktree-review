@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Worktree Review</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><circle cx='4' cy='3' r='2' fill='%232f81f7'/><circle cx='4' cy='13' r='2' fill='%232f81f7'/><circle cx='12' cy='6' r='2' fill='%233fb950'/><path d='M4 5v6M12 8c0 3-8 1-8 3' stroke='%232f81f7' stroke-width='1.5' fill='none'/></svg>">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css" media="(prefers-color-scheme: light)">
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" media="(prefers-color-scheme: dark)">
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <header class="brand">
+        <span class="logo"></span>
+        <div>
+          <div class="brand-title">Worktree Review</div>
+          <div class="brand-sub" id="conn">connecting…</div>
+        </div>
+      </header>
+      <input id="filter" class="filter" type="search" placeholder="Filter branches or paths">
+      <nav id="list"></nav>
+      <footer class="side-foot">
+        <button id="notify" class="link-btn" hidden>Turn on notifications</button>
+      </footer>
+    </aside>
+    <main id="main">
+      <div class="empty">Pick a worktree on the left.</div>
+    </main>
+  </div>
+  <div id="toast" class="toast" hidden></div>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <script src="/app.js" type="module"></script>
+</body>
+</html>
