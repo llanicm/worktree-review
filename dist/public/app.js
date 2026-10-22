@@ -2088,7 +2088,7 @@ function onState(st2) {
 function onLiveMessage(msg) {
   if (msg.type === "state") {
     const st2 = JSON.parse(msg.data);
-    need("#conn").textContent = `live · v${st2.version}`;
+    need("#conn").textContent = `v${st2.version}`;
     need("#conn").className = "brand-sub";
     onState(st2);
   } else {
