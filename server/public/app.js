@@ -70,6 +70,7 @@ const S = {
   summaries: {},     // wtId -> review summary draft
   prevStatus: new Map(),
   page: null,        // 'settings' | 'welcome' | null
+  shutCommits: new Set(), // collapsed commit sections in By commit view
   integ: null,       // integrations status from the server
   setupSig: null,
 };
@@ -475,13 +476,16 @@ function renderMain() {
   const byCommit = mode === 'commits';
   let filesHtml;
   if (byCommit) {
-    filesHtml = v.groups.map((g) => `<section class="commit-group" id="cg-${g.n}">
-      <div class="commit-head ${commitClass(g.n)}"><span class="cnum">${g.n ? `#${g.n}` : '±'}</span>
+    filesHtml = v.groups.map((g) => {
+      const shut = S.shutCommits.has(g.n);
+      return `<section class="commit-group ${shut ? 'shut' : ''}" id="cg-${g.n}">
+      <div class="commit-head ${commitClass(g.n)}"><button class="caret" data-act="toggle-commit" data-n="${g.n}" aria-expanded="${!shut}" aria-label="${shut ? 'Expand' : 'Collapse'} this commit" title="${shut ? 'Expand' : 'Collapse'} this commit">${shut ? '▸' : '▾'}</button><span class="cnum">${g.n ? `#${g.n}` : '±'}</span>
         <span class="commit-title">${esc(g.subject)}</span>
         <span class="muted small">${g.sha ? `<span class="mono">${g.sha.slice(0, 8)}</span> · ${esc(g.author)} · ${ago(g.time)} · ` : ''}${g.files.length} file${g.files.length === 1 ? '' : 's'}</span></div>
-      ${g.truncated ? '<div class="callout warn small">This commit is too large to show in full.</div>' : ''}
-      ${g.files.map((f) => renderFile(f, byAnchor, used)).join('') || '<div class="file-note">No file changes.</div>'}
-    </section>`).join('') + (v.diff.hiddenCommits ? `<div class="callout small">${v.diff.hiddenCommits} older commits aren't shown.</div>` : '');
+      ${shut ? '' : `${g.truncated ? '<div class="callout warn small">This commit is too large to show in full.</div>' : ''}
+      ${g.files.map((f) => renderFile(f, byAnchor, used)).join('') || '<div class="file-note">No file changes.</div>'}`}
+    </section>`;
+    }).join('') + (v.diff.hiddenCommits ? `<div class="callout small">${v.diff.hiddenCommits} older commits aren't shown.</div>` : '');
   } else {
     filesHtml = v.files.map((f) => renderFile(f, byAnchor, used)).join('');
   }
@@ -508,7 +512,9 @@ function renderMain() {
       <div class="actions">
         ${S.stale ? '<span class="banner">New changes landed. <button class="btn small" data-act="refresh">Refresh</button></span>' : ''}
         ${crButtonHtml(wt)}
-        <button class="btn" data-act="collapse-all">Collapse all</button>
+        ${byCommit && v.groups.every((g) => S.shutCommits.has(g.n))
+          ? '<button class="btn" data-act="expand-all">Expand all</button>'
+          : '<button class="btn" data-act="collapse-all">Collapse all</button>'}
         <button class="btn" data-act="mark-reviewed" title="Remember this exact state so you can see only what changes next">Mark as reviewed</button>
       </div>
     </div>
@@ -885,6 +891,7 @@ function select(id) {
   S.toggled.clear();
   S.forceRender.clear();
   S.editors.clear();
+  S.shutCommits.clear();
   S.hl = null;
   $('#main').scrollTop = 0;
   renderSidebar();
@@ -1054,7 +1061,19 @@ const actions = {
     S.toggled.set(f.uid, !isCollapsed(f));
     renderMain();
   },
-  'collapse-all': () => { for (const f of S.view.files) S.toggled.set(f.uid, true); renderMain(); },
+  'collapse-all': () => {
+    if (S.view.diff.mode === 'commits') for (const g of S.view.groups) S.shutCommits.add(g.n);
+    else for (const f of S.view.files) S.toggled.set(f.uid, true);
+    renderMain();
+  },
+  'expand-all': () => { S.shutCommits.clear(); renderMain(); },
+  'toggle-commit': (el) => {
+    const n = Number(el.dataset.n);
+    if (S.shutCommits.has(n)) S.shutCommits.delete(n); else S.shutCommits.add(n);
+    renderMain();
+    // Keep the header you clicked in view; collapsing can pull the page up under the cursor.
+    document.getElementById(`cg-${n}`)?.scrollIntoView({ block: 'nearest' });
+  },
   'hl-commit': (el, e) => {
     e.preventDefault();
     const n = el.dataset.n === '' ? null : Number(el.dataset.n);
@@ -1065,6 +1084,7 @@ const actions = {
   'view-commit': (el, e) => {
     e.preventDefault();
     S.scrollTo = `cg-${el.dataset.n}`;
+    S.shutCommits.delete(Number(el.dataset.n));
     if (S.view.diff.mode === 'commits') { renderMain(); return; }
     S.mode = 'commits';
     S.hl = null;

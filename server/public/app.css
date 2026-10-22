@@ -474,3 +474,7 @@ td.code .cbar { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; back
 .commit-head .cnum { font-family: var(--mono); font-weight: 700; color: var(--c); }
 .commit-title { font-weight: 600; flex: 1; min-width: 0; }
 .commit-group .file-head { top: 98px; }
+.commit-head .caret { border: 0; background: none; padding: 0 2px; color: var(--fg-muted); cursor: pointer; width: 18px; align-self: center; }
+.commit-head .caret:hover { color: var(--fg); }
+.commit-group.shut { margin-bottom: 8px; }
+.commit-group.shut .commit-head { margin-bottom: 0; position: static; }
