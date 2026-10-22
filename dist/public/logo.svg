@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-label="Worktree Review">
+  <defs>
+    <linearGradient id="wtr-g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2f81f7"/>
+      <stop offset="1" stop-color="#2da44e"/>
+    </linearGradient>
+  </defs>
+  <rect width="32" height="32" rx="8" fill="url(#wtr-g)"/>
+  <!-- trunk, and a worktree branch splitting off it -->
+  <path d="M10.5 8v16" stroke="#fff" stroke-width="2.4" stroke-linecap="round" fill="none"/>
+  <path d="M10.5 21.5C10.5 15.5 21 18.5 21 13" stroke="#fff" stroke-width="2.4" stroke-linecap="round" fill="none"/>
+  <circle cx="10.5" cy="8" r="2.6" fill="#fff"/>
+  <circle cx="10.5" cy="24" r="2.6" fill="#fff"/>
+  <!-- the branch tip, reviewed -->
+  <circle cx="21" cy="10.5" r="5.6" fill="#fff"/>
+  <path d="M18.4 10.6l1.8 1.8 3.5-3.6" stroke="#2f81f7" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+</svg>

@@ -1,3 +1,5 @@
+<img src="src/web/static/logo.svg" alt="" width="72" align="right">
+
 # Worktree Review
 
 **Review what Claude Code is doing in your git worktrees, the way you'd review a pull request, before it becomes one.**
