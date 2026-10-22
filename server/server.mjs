@@ -56,10 +56,12 @@ const state = {
   comments: [],
   reviews: [],
   cleaned: [],
+  trash: [], // folders of removed worktrees still being deleted in the background
   coderabbit: {}, // wtId -> last review { status, startedAt, finishedAt, baseRef, findings, reviewedFiles, error }
   ...loadJson(STATE_PATH, {}),
 };
 state.coderabbit ||= {};
+state.trash ||= [];
 // A review that was running when the server stopped can't be resumed.
 for (const r of Object.values(state.coderabbit)) if (r.status === 'running') { r.status = 'failed'; r.error = 'Interrupted: the server restarted during the review.'; }
 
@@ -675,15 +677,7 @@ async function removeWorktree(wt, how, { force = false } = {}) {
   const cs = cleanupStatus(wt, { ignoreBusy: true });
   if (!cs) throw new Error("The repository's main checkout can't be removed.");
   if (!cs.eligible && !(force && cs.forceable)) throw new Error(`Not safe to remove: ${cs.reasons.join('; ')}.`);
-  // git refuses a dirty worktree without --force; only pass it when nothing unique can be lost or you asked for it.
-  const forceGit = force || wt.dirtyKind === 'deleted-only';
-  // No --force: git refuses if anything modified or untracked appeared in the meantime.
-  try {
-    await run('git', ['worktree', 'remove', ...(forceGit ? ['--force'] : []), wt.path], { cwd: repo.root });
-  } catch (e) {
-    const err = explainWorktreeError(gitError(e), wt);
-    throw httpError(409, `Git refused to remove it: ${err.message}`);
-  }
+  await detachWorktree(wt, repo, { force: force || wt.dirtyKind === 'deleted-only' });
   let branchDeleted = false;
   let branchKept = null;
   if (cs.kind === 'idle') branchKept = wt.branch ? 'kept: it isn\'t merged' : null;
@@ -708,6 +702,55 @@ async function removeWorktree(wt, how, { force = false } = {}) {
   log(`removed worktree ${wt.path} (${how}, ${cs.kind === 'merged' ? `PR #${wt.pr.number} merged` : 'no session using it'})`);
   save();
   changed();
+}
+
+// Deleting a worktree's files is the slow part of removing it: a JS repo's node_modules is
+// often 100k+ files. So once it's checked, the folder is renamed aside (instant), git forgets
+// the worktree, and the files are deleted in the background.
+async function detachWorktree(wt, repo, { force }) {
+  // Submodules have their own checkouts to protect, so leave those to git.
+  if (fs.existsSync(path.join(wt.path, '.gitmodules'))) {
+    try {
+      await run('git', ['worktree', 'remove', ...(force ? ['--force'] : []), wt.path], { cwd: repo.root });
+    } catch (e) {
+      throw httpError(409, `Git refused to remove it: ${explainWorktreeError(gitError(e), wt).message}`);
+    }
+    return;
+  }
+  // The same check `git worktree remove` makes: nothing modified or untracked (ignored files don't count),
+  // done again right before the move so nothing that appeared since the last check is lost.
+  if (!force) {
+    const entries = parseStatus(await git(wt.path, ['status', '--porcelain=v1', '-z']));
+    if (entries.length) throw httpError(409, `Git found ${entries.length} modified or untracked file${entries.length === 1 ? '' : 's'} in it just now, so it wasn't removed.`);
+  }
+  const aside = path.join(path.dirname(wt.path), `.${path.basename(wt.path)}.removing-${Date.now()}`);
+  try {
+    fs.renameSync(wt.path, aside);
+  } catch (e) {
+    if (e.code !== 'EXDEV') throw httpError(409, `Couldn't move it aside to delete it: ${e.message}`);
+    await run('git', ['worktree', 'remove', '--force', wt.path], { cwd: repo.root, timeout: 600_000 });
+    return;
+  }
+  // Its folder is gone from where git expects it, so prune drops git's record of it.
+  await git(repo.root, ['worktree', 'prune']);
+  state.trash.push(aside);
+  save();
+  deleteInBackground(aside);
+}
+
+function deleteInBackground(p) {
+  const done = () => {
+    state.trash = state.trash.filter((t) => t !== p);
+    save();
+  };
+  if (process.platform === 'win32') {
+    fs.promises.rm(p, { recursive: true, force: true, maxRetries: 3 }).then(done, (e) => log('background delete failed', p, e.message));
+    return;
+  }
+  // A separate process, so the delete finishes even if the server restarts. Leftovers are retried at startup.
+  const child = spawn('rm', ['-rf', p], { detached: true, stdio: 'ignore' });
+  child.on('exit', (code) => (code === 0 ? done() : log('background delete failed', p, `rm exited ${code}`)));
+  child.unref();
 }
 
 // ---------- background jobs (bulk cleanup, single removals) ----------
@@ -1609,6 +1652,8 @@ server.on('error', (e) => {
 
 server.listen(PORT, '127.0.0.1', async () => {
   log(`Worktree Review ${VERSION} on http://127.0.0.1:${PORT}  (data: ${DATA_DIR})`);
+  state.trash = state.trash.filter((p) => fs.existsSync(p));
+  for (const p of state.trash) deleteInBackground(p);
   await discoverWorktrees();
   refreshSessions();
   getIntegrations().then(changed, () => {});
