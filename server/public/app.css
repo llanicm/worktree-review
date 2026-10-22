@@ -507,3 +507,16 @@ td.code .cbar { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; back
 .commit-body .link-btn { margin-top: 4px; }
 .commit-body.trailers-only { background: none; border: 0; padding: 0 12px; margin-top: 6px; }
 .commit-body.trailers-only .commit-trailers { margin-top: 0; }
+
+/* ---------- errors & results ---------- */
+.callout.danger { border-color: var(--red); background: color-mix(in srgb, var(--red) 8%, var(--bg)); }
+.callout.danger p { margin: 4px 0 0; }
+.callout.danger details { margin-top: 6px; font-size: 12px; }
+.side-alert { margin: 8px 12px 4px; padding: 8px 10px; border: 1px solid var(--red); border-radius: 8px; font-size: 12px; background: color-mix(in srgb, var(--red) 8%, var(--bg)); display: grid; gap: 6px; }
+.side-alert .btn { justify-self: start; }
+.result-list { padding: 8px 16px; }
+.result-h { font-size: 13px; margin: 10px 0 6px; }
+.result-h.bad { color: var(--red); }
+.result-item { padding: 6px 0; border-bottom: 1px solid var(--border-soft); font-size: 13px; }
+.result-item .mono { font-size: 11px; }
+.result-err { color: var(--fg); margin: 3px 0; font-size: 12px; }

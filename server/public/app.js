@@ -72,6 +72,7 @@ const S = {
   page: null,        // 'settings' | 'welcome' | null
   shutCommits: new Set(), // collapsed commit sections in By commit view
   openBodies: new Set(),  // commit messages expanded past the clamp
+  removeErrors: {},       // wtId -> why the last removal failed
   integ: null,       // integrations status from the server
   setupSig: null,
 };
@@ -119,7 +120,8 @@ function wtItem(wt, showNew) {
     <div class="wt-sub">
       ${wt.sessions.map(sessionChip).join('')}${prChip(wt.pr)}
       ${nComments ? `<span class="chip comments">${nComments} comment${nComments === 1 ? '' : 's'}</span>` : ''}
-      ${wt.dirty ? `<span class="chip" title="Uncommitted changes">${wt.dirty} uncommitted</span>` : ''}
+      ${wt.error ? `<span class="chip closed" title="${esc(wt.error.message)}">${wt.error.kind === 'broken-link' ? 'broken link' : "can't read"}</span>`
+        : wt.dirty ? `<span class="chip" title="Uncommitted changes">${wt.dirty} uncommitted</span>` : ''}
       ${wt.coderabbit?.status === 'running' ? '<span class="chip cr"><span class="dot busy"></span>CodeRabbit</span>'
         : wt.coderabbit?.open ? `<span class="chip cr">${wt.coderabbit.open} finding${wt.coderabbit.open === 1 ? '' : 's'}</span>` : ''}
     </div>
@@ -139,6 +141,12 @@ function renderSidebar() {
     if (opts.tools) parts.push(opts.tools);
     if (!opts.hidden) parts.push(items.map((w) => wtItem(w, opts.showNew)).join(''));
   };
+  const broken = S.st.worktrees.filter((w) => w.error?.kind === 'broken-link').length;
+  if (broken) {
+    parts.push(`<div class="side-alert"><strong>${broken} worktree${broken === 1 ? ' has a' : 's have'} broken link${broken === 1 ? '' : 's'}</strong>
+      to ${broken === 1 ? 'its' : 'their'} repository, so git can't read ${broken === 1 ? 'it' : 'them'}. This usually means the repository moved.
+      <button class="btn small" data-act="repair-all">Repair ${broken === 1 ? 'it' : `all ${broken}`}</button></div>`);
+  }
   section('Claude is working', g.working, { showNew: true });
   section('Recent', g.recent, { showNew: true });
   section('PR merged', g.merged, {
@@ -544,13 +552,20 @@ function renderMain() {
   }
 }
 
-const headerSig = (wt) => JSON.stringify([wt.sessions, wt.pr, wt.cleanup, wt.ahead, wt.dirty, wt.baseRef, wt.baseError, S.st.sessions.length, S.st.config]);
+const headerSig = (wt) => JSON.stringify([wt.sessions, wt.pr, wt.cleanup, wt.ahead, wt.dirty, wt.baseRef, wt.baseError, wt.error, S.removeErrors[wt.id], S.st.sessions.length, S.st.config]);
 
 function headerHtml(wt) {
   const name = wt.branch || `detached @ ${wt.head?.slice(0, 10)}`;
   const pr = wt.pr ? ` <a class="pr-no" href="${esc(wt.pr.url)}" target="_blank">#${wt.pr.number}</a>` : '';
   const cs = wt.cleanup;
   let cleanup = '';
+  const err = wt.error
+    ? `<div class="callout danger"><strong>${wt.error.kind === 'broken-link' ? 'Git can\'t read this worktree' : 'Git reported a problem with this worktree'}</strong>
+        <p>${esc(wt.error.message)}</p>
+        ${wt.error.detail && wt.error.detail !== wt.error.message ? `<details><summary>Git's message</summary><code class="cmd">${esc(wt.error.detail)}</code></details>` : ''}
+        ${wt.error.kind === 'broken-link' ? '<div class="actions" style="margin-top:8px"><button class="btn primary" data-act="repair">Repair links</button></div>' : ''}</div>`
+    : '';
+  const removeErr = S.removeErrors[wt.id] ? `<div class="callout danger"><strong>Couldn't remove this worktree.</strong><p>${esc(S.removeErrors[wt.id])}</p></div>` : '';
   if (cs) {
     cleanup = cs.eligible
       ? `<div class="callout merged"><strong>PR merged.</strong> This worktree is clean and nothing is using it. ${cs.auto && S.st.config.autoCleanup ? 'It will be removed automatically in a moment.' : 'It was merged before auto-cleanup was set up, so it waits for you.'}
@@ -569,7 +584,8 @@ function headerHtml(wt) {
       <span>${wt.ahead} commit${wt.ahead === 1 ? '' : 's'}${wt.dirty ? ` + ${wt.dirty} uncommitted` : ''}</span>
       <span>updated ${ago(wt.lastActivity)}</span>
     </div>
-    ${wt.baseError ? `<div class="callout warn">${esc(wt.baseError)}. Set a different base above.</div>` : ''}
+    ${err}${removeErr}
+    ${wt.baseError && !wt.error ? `<div class="callout warn">${esc(wt.baseError)}. Set a different base above.</div>` : ''}
     ${cleanup}`;
 }
 
@@ -790,6 +806,36 @@ async function saveConfig(patch) {
     toast('Saved');
   } catch (e) { toast(e.message, true); }
 }
+
+// ---------- results dialog (bulk cleanup / repair) ----------
+
+function showResult({ title, busy, ok = [], okLabel, failed = [], failedLabel, note }) {
+  let el = $('#result');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'result';
+    el.className = 'modal-backdrop';
+    el.addEventListener('click', (e) => { if (e.target === el && !el.dataset.busy) closeResult(); });
+    document.body.appendChild(el);
+  }
+  el.dataset.busy = busy ? '1' : '';
+  const item = (x, bad) => `<div class="result-item ${bad ? 'bad' : ''}">
+      <div><strong>${esc(x.branch || tilde(x.path))}</strong> <span class="muted mono">${esc(tilde(x.path))}</span></div>
+      ${bad ? `<div class="result-err">${esc(x.error)}</div><button class="link-btn" data-act="result-open" data-id="${esc(x.id)}">Open this worktree</button>` : ''}
+    </div>`;
+  el.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-label="${esc(title)}">
+    <div class="modal-head"><span>${esc(title)}</span>${busy ? '' : '<button class="link-btn" data-act="close-result" aria-label="Close">✕</button>'}</div>
+    <div class="dir-list result-list">
+      ${busy ? '<div class="file-note">Working… removing a worktree can take a few seconds each.</div>' : `
+        ${failed.length ? `<h3 class="result-h bad">${failedLabel} (${failed.length})</h3>${failed.map((x) => item(x, true)).join('')}` : ''}
+        ${ok.length ? `<h3 class="result-h">${okLabel} (${ok.length})</h3>${ok.map((x) => item(x, false)).join('')}` : ''}
+        ${!ok.length && !failed.length ? '<div class="file-note">Nothing to do.</div>' : ''}
+        ${note ? `<p class="muted small">${esc(note)}</p>` : ''}`}
+    </div>
+    ${busy ? '' : '<div class="modal-foot"><div class="actions" style="justify-content:flex-end"><button class="btn" data-act="close-result">Close</button></div></div>'}
+  </div>`;
+}
+function closeResult() { $('#result')?.remove(); }
 
 // ---------- folder picker ----------
 
@@ -1157,15 +1203,38 @@ const actions = {
   'cancel-review': async (el) => { await api('POST', `/api/reviews/${el.dataset.id}/cancel`); await reloadComments(); },
   remove: async () => {
     if (!confirm('Remove this worktree? Its branch is deleted too if it matches the merged PR.')) return;
-    await api('POST', `/api/worktrees/${S.selId}/remove`);
-    toast('Worktree removed');
+    const id = S.selId;
+    try {
+      await api('POST', `/api/worktrees/${id}/remove`);
+      delete S.removeErrors[id];
+      toast('Worktree removed');
+    } catch (e) {
+      S.removeErrors[id] = e.message;
+      renderMain();
+    }
   },
   'cleanup-safe': async () => {
     const n = S.st.worktrees.filter((w) => w.cleanup?.eligible).length;
     if (!confirm(`Remove ${n} merged worktree${n === 1 ? '' : 's'} that are clean and not in use?`)) return;
+    showResult({ title: `Removing ${n} worktree${n === 1 ? '' : 's'}…`, busy: true });
     const r = await api('POST', '/api/cleanup/safe');
-    toast(`Removed ${r.removed.length}${r.failed.length ? `, ${r.failed.length} skipped` : ''}`);
+    showResult({ title: 'Clean up merged worktrees', ok: r.removed, okLabel: 'Removed', failed: r.failed, failedLabel: "Couldn't remove" });
   },
+  repair: async () => {
+    const r = await api('POST', `/api/worktrees/${S.selId}/repair`);
+    if (r.failed.length) { S.removeErrors[S.selId] = `Repair didn't work: ${r.failed[0].error}`; renderMain(); }
+    else { delete S.removeErrors[S.selId]; toast('Link repaired'); S.view = null; loadView(); }
+  },
+  'repair-all': async () => {
+    const n = S.st.worktrees.filter((w) => w.error?.kind === 'broken-link').length;
+    if (!confirm(`Repair the links for ${n} worktree${n === 1 ? '' : 's'}? This runs "git worktree repair" in each repository, which rewrites the link files for all of that repository's worktrees; your code isn't touched.`)) return;
+    showResult({ title: `Repairing ${n} worktree link${n === 1 ? '' : 's'}…`, busy: true });
+    const r = await api('POST', '/api/repair');
+    showResult({ title: 'Repair worktree links', ok: r.fixed, okLabel: 'Repaired', failed: r.failed, failedLabel: "Couldn't repair",
+      note: r.fixed.length ? 'Repaired worktrees are checked again now. Clean, merged ones become removable within a few seconds.' : '' });
+  },
+  'close-result': () => closeResult(),
+  'result-open': (el) => { closeResult(); location.hash = `#/${el.dataset.id}`; },
   'auto-cleanup': async (el) => { await api('POST', '/api/config', { autoCleanup: el.checked }); },
   'toggle-older': () => { S.showOlder = !S.showOlder; renderSidebar(); },
   'toggle-cleaned': () => { S.showCleaned = !S.showCleaned; renderSidebar(); },
@@ -1265,6 +1334,7 @@ document.addEventListener('input', (e) => {
 
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && $('#picker')) { closePicker(); return; }
+  if (e.key === 'Escape' && $('#result') && !$('#result').dataset.busy) { closeResult(); return; }
   const el = e.target;
   if (!el.dataset?.ek || el.dataset.ek === 'summary') return;
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); saveEditor(el.dataset.ek).catch((err) => toast(err.message, true)); }

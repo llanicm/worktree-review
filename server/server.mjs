@@ -106,6 +106,35 @@ function run(cmd, args, opts = {}) {
     });
   });
 }
+// The useful part of a failed git command: its fatal:/error: line, not "Command failed: git ...".
+function gitError(e) {
+  const lines = String(e?.stderr || '').split('\n').map((l) => l.trim()).filter(Boolean);
+  const key = lines.find((l) => /^(fatal|error):/.test(l)) || lines[lines.length - 1];
+  return (key || String(e?.message || e).split('\n')[0]).replace(/^(fatal|error):\s*/, '');
+}
+
+// Turn a git error about a worktree into something a person can act on.
+function explainWorktreeError(msg, wt) {
+  const m = msg.match(/not a git repository: (.+?)(?:\/\.git)?\/worktrees\//);
+  if (m) {
+    return {
+      kind: 'broken-link',
+      message: `This worktree's link to its repository is broken: it points to ${m[1]}, which isn't where the repository is now. This usually happens after the repository is moved. Repair runs \`git worktree repair\`, which rewrites the links for every worktree of this repository at once; no code in any worktree changes.`,
+      detail: msg,
+    };
+  }
+  if (/cannot be (moved or )?removed|containing submodules/.test(msg)) {
+    return { kind: 'submodules', message: 'Git won\'t remove a worktree that contains submodules. Remove it by hand if you\'re sure.', detail: msg };
+  }
+  if (/contains modified or untracked files|is dirty/.test(msg)) {
+    return { kind: 'dirty', message: 'Git found modified or untracked files in it, so it wasn\'t removed.', detail: msg };
+  }
+  if (/is locked|locked working tree/.test(msg)) {
+    return { kind: 'locked', message: 'The worktree is locked. Something (often a Claude session) asked git to keep it.', detail: msg };
+  }
+  return { kind: 'other', message: msg, detail: msg };
+}
+
 const git = (cwd, args, opts) => gitPool(() => run('git', ['-c', 'core.quotepath=false', ...args], { ...opts, cwd }));
 const gitOk = (cwd, args) => git(cwd, args).then(() => true, () => false);
 
@@ -362,7 +391,13 @@ async function pollWorktrees() {
   const due = [...wts.values()].filter((w) => w.nextCheck <= now && !w.checking);
   await Promise.all(due.map(async (wt) => {
     wt.nextCheck = now + (isActive(wt) ? 3_000 : 60_000);
-    try { await refreshWorktree(wt); } catch (e) { wt.error = String(e.message).split('\n')[0]; }
+    try {
+      await refreshWorktree(wt);
+      if (wt.error) { wt.error = null; changed(); }
+    } catch (e) {
+      const err = explainWorktreeError(gitError(e), wt);
+      if (wt.error?.detail !== err.detail) { wt.error = err; changed(); }
+    }
   }));
 }
 
@@ -502,6 +537,7 @@ function cleanupStatus(wt) {
   const pr = wt.pr;
   if (!pr || pr.state !== 'MERGED' || wt.isMain || !wt.branch) return null;
   const reasons = [];
+  if (wt.error) reasons.push(wt.error.kind === 'broken-link' ? "git can't read it (broken link to its repository)" : `git can't read it: ${wt.error.message}`);
   if (wt.locked) reasons.push('the worktree is locked');
   if (wt.dirty > 0) reasons.push(`${wt.dirty} uncommitted change${wt.dirty === 1 ? '' : 's'}`);
   if (wt.sessions.length) reasons.push(`in use by ${wt.sessions.map((s) => s.name).join(', ')}`);
@@ -532,12 +568,23 @@ async function runCleanup() {
 async function removeWorktree(wt, how) {
   const repo = repos.get(wt.repoKey);
   refreshSessions();
-  await refreshWorktree(wt, { force: true });
+  try {
+    await refreshWorktree(wt, { force: true });
+    wt.error = null;
+  } catch (e) {
+    wt.error = explainWorktreeError(gitError(e), wt);
+    changed();
+  }
   const cs = cleanupStatus(wt);
   if (!cs) throw new Error('This worktree has no merged PR.');
   if (!cs.eligible) throw new Error(`Not safe to remove: ${cs.reasons.join('; ')}.`);
   // No --force: git refuses if anything modified or untracked appeared in the meantime.
-  await run('git', ['worktree', 'remove', wt.path], { cwd: repo.root });
+  try {
+    await run('git', ['worktree', 'remove', wt.path], { cwd: repo.root });
+  } catch (e) {
+    const err = explainWorktreeError(gitError(e), wt);
+    throw httpError(409, `Git refused to remove it: ${err.message}`);
+  }
   let branchDeleted = false;
   try {
     const tip = (await git(repo.root, ['rev-parse', `refs/heads/${wt.branch}`])).trim();
@@ -554,6 +601,27 @@ async function removeWorktree(wt, how) {
   log(`removed worktree ${wt.path} (${how}, PR #${wt.pr.number} merged)`);
   save();
   changed();
+}
+
+// `git worktree repair` rewrites the links between a repository and its worktrees after either moves.
+async function repairWorktrees(list) {
+  const fixed = [], failed = [];
+  for (const wt of list) {
+    const repo = repos.get(wt.repoKey);
+    try {
+      await run('git', ['worktree', 'repair', wt.path], { cwd: repo.root });
+      wt.error = null;
+      await refreshWorktree(wt, { force: true });
+      fixed.push({ path: wt.path, branch: wt.branch });
+      log(`repaired worktree link ${wt.path}`);
+    } catch (e) {
+      const err = explainWorktreeError(gitError(e), wt);
+      wt.error = err;
+      failed.push({ id: wt.id, path: wt.path, branch: wt.branch, error: err.message });
+    }
+  }
+  changed();
+  return { fixed, failed };
 }
 
 // ---------- diffs ----------
@@ -1041,6 +1109,7 @@ function publicState() {
         pr: wt.pr ? { number: wt.pr.number, state: wt.pr.state, isDraft: wt.pr.isDraft, url: wt.pr.url, title: wt.pr.title, mergedAt: wt.pr.mergedAt } : null,
         sessions: wt.sessions.map((x) => ({ sessionId: x.sessionId, name: x.name, status: x.status })),
         cleanup: cleanupStatus(wt),
+        error: wt.error || null,
         coderabbit: (() => {
           const r = state.coderabbit[wt.id];
           if (!r) return null;
@@ -1161,10 +1230,18 @@ const routes = [
     const removed = [], failed = [];
     for (const wt of [...wts.values()]) {
       if (!cleanupStatus(wt)?.eligible) continue;
-      try { await removeWorktree(wt, 'manual'); removed.push(wt.path); } catch (e) { failed.push({ path: wt.path, error: e.message }); }
+      try {
+        await removeWorktree(wt, 'manual');
+        removed.push({ path: wt.path, branch: wt.branch });
+      } catch (e) {
+        failed.push({ id: wt.id, path: wt.path, branch: wt.branch, error: e.message, kind: wt.error?.kind || null });
+      }
     }
+    log(`cleanup: removed ${removed.length}, failed ${failed.length}`, failed.map((f) => `${f.path}: ${f.error}`).join(' | '));
     return { removed, failed };
   }],
+  ['POST', /^\/api\/worktrees\/(\w+)\/repair$/, async (m) => repairWorktrees([getWt(m[1])])],
+  ['POST', /^\/api\/repair$/, async () => repairWorktrees([...wts.values()].filter((w) => w.error?.kind === 'broken-link'))],
   ['POST', /^\/api\/config$/, async (m, body) => { await updateConfig(body); return { ok: true }; }],
   ['GET', /^\/api\/worktrees\/(\w+)\/coderabbit$/, async (m, body, url) => {
     const wt = getWt(m[1]);
@@ -1309,7 +1386,7 @@ const server = http.createServer(async (req, res) => {
       send(res, 200, await route[2](url.pathname.match(route[1]), body, url));
     } catch (e) {
       if (!e.status) log('error', req.method, url.pathname, e.message);
-      send(res, e.status || 500, { error: e.message.split('\n')[0] });
+      send(res, e.status || 500, { error: e.status ? e.message.split('\n')[0] : (e.stderr ? gitError(e) : e.message.split('\n')[0]) });
     }
     return;
   }
