@@ -533,7 +533,7 @@ function openReviewItems(wtId) {
   return state.comments.filter((c) => c.wtId === wtId && (c.status === 'draft' || c.status === 'pending')).length;
 }
 
-function cleanupStatus(wt) {
+function cleanupStatus(wt, { ignoreBusy = false } = {}) {
   const pr = wt.pr;
   if (!pr || pr.state !== 'MERGED' || wt.isMain || !wt.branch) return null;
   const reasons = [];
@@ -543,6 +543,7 @@ function cleanupStatus(wt) {
   if (wt.sessions.length) reasons.push(`in use by ${wt.sessions.map((s) => s.name).join(', ')}`);
   if (wt.head && wt.head !== pr.headRefOid && wt.headInMerged !== true) reasons.push('has commits that are not in the merged PR');
   if (openReviewItems(wt.id)) reasons.push('has unsent review comments');
+  if (wt.busy && !ignoreBusy) reasons.push('being removed right now');
   return {
     eligible: reasons.length === 0,
     reasons,
@@ -559,7 +560,7 @@ async function runCleanup() {
       changed();
     }
     const cs = cleanupStatus(wt);
-    if (cs?.eligible && cs.auto) {
+    if (cs?.eligible && cs.auto && !wt.busy) {
       try { await removeWorktree(wt, 'auto'); } catch (e) { log('auto-cleanup skipped', wt.path, e.message); }
     }
   }
@@ -575,7 +576,7 @@ async function removeWorktree(wt, how) {
     wt.error = explainWorktreeError(gitError(e), wt);
     changed();
   }
-  const cs = cleanupStatus(wt);
+  const cs = cleanupStatus(wt, { ignoreBusy: true });
   if (!cs) throw new Error('This worktree has no merged PR.');
   if (!cs.eligible) throw new Error(`Not safe to remove: ${cs.reasons.join('; ')}.`);
   // No --force: git refuses if anything modified or untracked appeared in the meantime.
@@ -601,6 +602,47 @@ async function removeWorktree(wt, how) {
   log(`removed worktree ${wt.path} (${how}, PR #${wt.pr.number} merged)`);
   save();
   changed();
+}
+
+// ---------- background jobs (bulk cleanup, single removals) ----------
+// Removing a worktree deletes its files, which takes seconds for a big repo, so
+// removals run here and report progress over the live connection.
+
+const jobs = [];
+
+function startJob(kind, title, items, worker) {
+  if (kind === 'cleanup' && jobs.some((j) => j.kind === 'cleanup' && j.status === 'running')) {
+    throw httpError(409, 'A cleanup is already running.');
+  }
+  const job = {
+    id: newId('j'), kind, title, total: items.length, done: 0, current: null,
+    ok: [], failed: [], status: 'running', startedAt: Date.now(), finishedAt: null, dismissed: false,
+  };
+  jobs.unshift(job);
+  jobs.splice(20);
+  (async () => {
+    for (const wt of items) {
+      job.current = { id: wt.id, branch: wt.branch, path: wt.path, startedAt: Date.now() };
+      wt.busy = kind;
+      changed();
+      try {
+        await worker(wt);
+        job.ok.push({ id: wt.id, branch: wt.branch, path: wt.path });
+      } catch (e) {
+        job.failed.push({ id: wt.id, branch: wt.branch, path: wt.path, error: e.message, kind: wt.error?.kind || null });
+      } finally {
+        wt.busy = null;
+      }
+      job.done++;
+      changed();
+    }
+    job.current = null;
+    job.status = 'done';
+    job.finishedAt = Date.now();
+    log(`${job.title}: ${job.ok.length} ok, ${job.failed.length} failed`, job.failed.map((f) => `${f.path}: ${f.error}`).join(' | '));
+    changed();
+  })();
+  return job;
 }
 
 // `git worktree repair` rewrites the links between a repository and its worktrees after either moves.
@@ -1094,6 +1136,7 @@ function publicState() {
     onboardedAt: state.onboardedAt || null,
     repos: [...repos.values()].map((r) => ({ name: r.name, root: r.root, github: r.gh ? `${r.gh.owner}/${r.gh.name}` : null })),
     coderabbitLogin: crLogin,
+    jobs: jobs.filter((j) => !j.dismissed).slice(0, 5),
     coderabbitReady: !!(integrations.data?.coderabbit.installed && integrations.data?.coderabbit.authed),
     installedAt: state.installedAt,
     sessions: [...sessions.values()].map((s) => ({ sessionId: s.sessionId, name: s.name, status: s.status, cwd: s.cwd })),
@@ -1110,6 +1153,7 @@ function publicState() {
         sessions: wt.sessions.map((x) => ({ sessionId: x.sessionId, name: x.name, status: x.status })),
         cleanup: cleanupStatus(wt),
         error: wt.error || null,
+        busy: wt.busy || null,
         coderabbit: (() => {
           const r = state.coderabbit[wt.id];
           if (!r) return null;
@@ -1225,20 +1269,29 @@ const routes = [
     return { ok: true };
   }],
   ['POST', /^\/api\/worktrees\/(\w+)\/submit$/, (m, body) => submitReview(getWt(m[1]), body)],
-  ['POST', /^\/api\/worktrees\/(\w+)\/remove$/, async (m) => { await removeWorktree(getWt(m[1]), 'manual'); return { ok: true }; }],
-  ['POST', /^\/api\/cleanup\/safe$/, async () => {
-    const removed = [], failed = [];
-    for (const wt of [...wts.values()]) {
-      if (!cleanupStatus(wt)?.eligible) continue;
-      try {
-        await removeWorktree(wt, 'manual');
-        removed.push({ path: wt.path, branch: wt.branch });
-      } catch (e) {
-        failed.push({ id: wt.id, path: wt.path, branch: wt.branch, error: e.message, kind: wt.error?.kind || null });
-      }
-    }
-    log(`cleanup: removed ${removed.length}, failed ${failed.length}`, failed.map((f) => `${f.path}: ${f.error}`).join(' | '));
-    return { removed, failed };
+  ['POST', /^\/api\/worktrees\/(\w+)\/remove$/, (m) => {
+    const wt = getWt(m[1]);
+    if (wt.busy) throw httpError(409, 'This worktree is already being removed.');
+    return startJob('remove', `Removing ${wt.branch || 'worktree'}`, [wt], (w) => removeWorktree(w, 'manual'));
+  }],
+  // Test-only (WTR_TEST_JOBS=1): a slow fake cleanup over pretend worktrees, to exercise the progress UI.
+  ...(process.env.WTR_TEST_JOBS === '1' ? [['POST', /^\/api\/test\/job$/, (m, body) => {
+    const items = Array.from({ length: body.count || 4 }, (_, i) => ({ id: `test${i}`, branch: `test/branch-${i + 1}`, path: `${HOME}/fake/wt-${i + 1}` }));
+    return startJob('cleanup', `Removing ${items.length} merged worktrees`, items, async (w) => {
+      await new Promise((r) => setTimeout(r, body.delay || 1500));
+      if (w.id === `test${(body.failAt ?? -1)}`) throw new Error("Git refused to remove it: Git found modified or untracked files in it, so it wasn't removed.");
+    });
+  }]] : []),
+  ['POST', /^\/api\/jobs\/(\w+)\/dismiss$/, (m) => {
+    const job = jobs.find((j) => j.id === m[1]);
+    if (job) job.dismissed = true;
+    changed();
+    return { ok: true };
+  }],
+  ['POST', /^\/api\/cleanup\/safe$/, () => {
+    const items = [...wts.values()].filter((wt) => !wt.busy && cleanupStatus(wt)?.eligible);
+    if (!items.length) throw httpError(409, 'Nothing is safe to remove right now.');
+    return startJob('cleanup', `Removing ${items.length} merged worktree${items.length === 1 ? '' : 's'}`, items, (wt) => removeWorktree(wt, 'manual'));
   }],
   ['POST', /^\/api\/worktrees\/(\w+)\/repair$/, async (m) => repairWorktrees([getWt(m[1])])],
   ['POST', /^\/api\/repair$/, async () => repairWorktrees([...wts.values()].filter((w) => w.error?.kind === 'broken-link'))],

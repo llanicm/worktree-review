@@ -73,6 +73,7 @@ const S = {
   shutCommits: new Set(), // collapsed commit sections in By commit view
   openBodies: new Set(),  // commit messages expanded past the clamp
   removeErrors: {},       // wtId -> why the last removal failed
+  seenJobs: new Set(),    // finished jobs already handled
   integ: null,       // integrations status from the server
   setupSig: null,
 };
@@ -120,6 +121,7 @@ function wtItem(wt, showNew) {
     <div class="wt-sub">
       ${wt.sessions.map(sessionChip).join('')}${prChip(wt.pr)}
       ${nComments ? `<span class="chip comments">${nComments} comment${nComments === 1 ? '' : 's'}</span>` : ''}
+      ${wt.busy ? '<span class="chip busy-chip"><span class="dot busy"></span>removing…</span>' : ''}
       ${wt.error ? `<span class="chip closed" title="${esc(wt.error.message)}">${wt.error.kind === 'broken-link' ? 'broken link' : "can't read"}</span>`
         : wt.dirty ? `<span class="chip" title="Uncommitted changes">${wt.dirty} uncommitted</span>` : ''}
       ${wt.coderabbit?.status === 'running' ? '<span class="chip cr"><span class="dot busy"></span>CodeRabbit</span>'
@@ -173,6 +175,7 @@ function renderSidebar() {
   if (!S.st.worktrees.length) parts.push('<div class="group-tools">No worktrees yet. Repos show up here once Claude Code has worked in them.</div>');
   if (S.st.prError) parts.unshift(`<div class="group-tools">${md(S.st.prError)}</div>`);
   $('#list').innerHTML = parts.join('');
+  renderJobs();
 
   const n = S.st.worktrees.filter((w) => w.review.needsReview && (w.sessions.length || Date.now() - w.lastActivity < S.st.config.recentDays * 864e5)).length;
   document.title = n ? `(${n}) Worktree Review` : 'Worktree Review';
@@ -454,7 +457,7 @@ async function loadCodeRabbit() {
 }
 
 setInterval(() => {
-  for (const el of document.querySelectorAll('.cr-elapsed')) el.textContent = elapsed(Number(el.dataset.start));
+  for (const el of document.querySelectorAll('.cr-elapsed, .tick')) el.textContent = elapsed(Number(el.dataset.start));
 }, 1000);
 
 function renderMain() {
@@ -552,7 +555,7 @@ function renderMain() {
   }
 }
 
-const headerSig = (wt) => JSON.stringify([wt.sessions, wt.pr, wt.cleanup, wt.ahead, wt.dirty, wt.baseRef, wt.baseError, wt.error, S.removeErrors[wt.id], S.st.sessions.length, S.st.config]);
+const headerSig = (wt) => JSON.stringify([wt.sessions, wt.pr, wt.cleanup, wt.ahead, wt.dirty, wt.baseRef, wt.baseError, wt.error, wt.busy, S.removeErrors[wt.id], S.st.sessions.length, S.st.config]);
 
 function headerHtml(wt) {
   const name = wt.branch || `detached @ ${wt.head?.slice(0, 10)}`;
@@ -569,7 +572,7 @@ function headerHtml(wt) {
   if (cs) {
     cleanup = cs.eligible
       ? `<div class="callout merged"><strong>PR merged.</strong> This worktree is clean and nothing is using it. ${cs.auto && S.st.config.autoCleanup ? 'It will be removed automatically in a moment.' : 'It was merged before auto-cleanup was set up, so it waits for you.'}
-          <div class="actions" style="margin-top:8px"><button class="btn danger" data-act="remove">Remove worktree</button></div></div>`
+          <div class="actions" style="margin-top:8px">${wt.busy ? '<span class="muted"><span class="dot busy"></span> Removing…</span>' : '<button class="btn danger" data-act="remove">Remove worktree</button>'}</div></div>`
       : `<div class="callout warn"><strong>PR merged, but it isn't safe to remove this worktree automatically:</strong><ul>${cs.reasons.map((r) => `<li>${esc(r)}</li>`).join('')}</ul></div>`;
   }
   return `<div class="title-row"><h1>${esc(name)}${pr}</h1>
@@ -805,6 +808,41 @@ async function saveConfig(patch) {
     await api('POST', '/api/config', patch);
     toast('Saved');
   } catch (e) { toast(e.message, true); }
+}
+
+// ---------- background jobs (sidebar progress) ----------
+
+function jobHtml(j) {
+  const pct = j.total ? Math.round((j.done / j.total) * 100) : 100;
+  const running = j.status === 'running';
+  const verb = j.kind === 'repair' ? 'Repaired' : 'Removed';
+  const line = running
+    ? `${j.current ? `${j.kind === 'repair' ? 'Repairing' : 'Removing'} <strong>${esc(j.current.branch || tilde(j.current.path))}</strong>` : 'Starting…'} · ${j.done + 1 > j.total ? j.total : j.done + 1} of ${j.total}`
+    : `${verb} ${j.ok.length}${j.failed.length ? ` · <span class="bad">${j.failed.length} failed</span>` : ''}`;
+  return `<div class="job ${running ? 'running' : j.failed.length ? 'failed' : 'ok'}">
+    <div class="job-top"><span class="job-title">${esc(j.title)}</span>
+      <span class="muted small">${running ? `<span class="tick" data-start="${j.startedAt}">${elapsed(j.startedAt)}</span>` : elapsedBetween(j.startedAt, j.finishedAt)}</span></div>
+    <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="${j.total}" aria-valuenow="${j.done}"><div class="fill" style="width:${running ? Math.max(pct, 4) : 100}%"></div></div>
+    <div class="job-line">${line}</div>
+    ${j.failed.slice(0, 3).map((f) => `<div class="job-fail"><button class="link-btn" data-act="result-open" data-id="${esc(f.id)}">${esc(f.branch || tilde(f.path))}</button>: ${esc(f.error)}</div>`).join('')}
+    ${!running ? `<div class="actions">${j.failed.length > 3 || j.ok.length ? `<button class="link-btn" data-act="job-details" data-id="${j.id}">Details</button>` : ''}<span style="flex:1"></span><button class="link-btn" data-act="job-dismiss" data-id="${j.id}">Dismiss</button></div>` : ''}
+  </div>`;
+}
+const elapsedBetween = (a, b) => { const s = Math.max(0, Math.round(((b || Date.now()) - a) / 1000)); return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`; };
+
+function renderJobs() {
+  const el = $('#jobs');
+  if (!el) return;
+  const list = S.st?.jobs || [];
+  el.innerHTML = list.map(jobHtml).join('');
+  for (const j of list) {
+    if (j.status !== 'done' || S.seenJobs.has(j.id)) continue;
+    S.seenJobs.add(j.id);
+    for (const f of j.failed) S.removeErrors[f.id] = f.error;
+    for (const o of j.ok) delete S.removeErrors[o.id];
+    if (!j.failed.length) setTimeout(() => api('POST', `/api/jobs/${j.id}/dismiss`).catch(() => {}), 6000);
+    if (j.failed.length && S.selId && j.failed.some((f) => f.id === S.selId)) renderMain();
+  }
 }
 
 // ---------- results dialog (bulk cleanup / repair) ----------
@@ -1203,22 +1241,20 @@ const actions = {
   'cancel-review': async (el) => { await api('POST', `/api/reviews/${el.dataset.id}/cancel`); await reloadComments(); },
   remove: async () => {
     if (!confirm('Remove this worktree? Its branch is deleted too if it matches the merged PR.')) return;
-    const id = S.selId;
-    try {
-      await api('POST', `/api/worktrees/${id}/remove`);
-      delete S.removeErrors[id];
-      toast('Worktree removed');
-    } catch (e) {
-      S.removeErrors[id] = e.message;
-      renderMain();
-    }
+    delete S.removeErrors[S.selId];
+    await api('POST', `/api/worktrees/${S.selId}/remove`);
   },
   'cleanup-safe': async () => {
     const n = S.st.worktrees.filter((w) => w.cleanup?.eligible).length;
-    if (!confirm(`Remove ${n} merged worktree${n === 1 ? '' : 's'} that are clean and not in use?`)) return;
-    showResult({ title: `Removing ${n} worktree${n === 1 ? '' : 's'}…`, busy: true });
-    const r = await api('POST', '/api/cleanup/safe');
-    showResult({ title: 'Clean up merged worktrees', ok: r.removed, okLabel: 'Removed', failed: r.failed, failedLabel: "Couldn't remove" });
+    if (!confirm(`Remove ${n} merged worktree${n === 1 ? '' : 's'} that are clean and not in use? This runs in the background.`)) return;
+    await api('POST', '/api/cleanup/safe');
+  },
+  'job-dismiss': (el) => api('POST', `/api/jobs/${el.dataset.id}/dismiss`),
+  'job-details': (el) => {
+    const j = S.st.jobs.find((x) => x.id === el.dataset.id);
+    if (!j) return;
+    const verb = j.kind === 'repair' ? 'Repaired' : 'Removed';
+    showResult({ title: j.title, ok: j.ok, okLabel: verb, failed: j.failed, failedLabel: j.kind === 'repair' ? "Couldn't repair" : "Couldn't remove" });
   },
   repair: async () => {
     const r = await api('POST', `/api/worktrees/${S.selId}/repair`);
@@ -1228,8 +1264,9 @@ const actions = {
   'repair-all': async () => {
     const n = S.st.worktrees.filter((w) => w.error?.kind === 'broken-link').length;
     if (!confirm(`Repair the links for ${n} worktree${n === 1 ? '' : 's'}? This runs "git worktree repair" in each repository, which rewrites the link files for all of that repository's worktrees; your code isn't touched.`)) return;
-    showResult({ title: `Repairing ${n} worktree link${n === 1 ? '' : 's'}…`, busy: true });
+    toast(`Repairing ${n} worktree link${n === 1 ? '' : 's'}…`);
     const r = await api('POST', '/api/repair');
+    if (!r.failed.length) { toast(`Repaired ${r.fixed.length} worktree link${r.fixed.length === 1 ? '' : 's'}`); return; }
     showResult({ title: 'Repair worktree links', ok: r.fixed, okLabel: 'Repaired', failed: r.failed, failedLabel: "Couldn't repair",
       note: r.fixed.length ? 'Repaired worktrees are checked again now. Clean, merged ones become removable within a few seconds.' : '' });
   },

@@ -520,3 +520,25 @@ td.code .cbar { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; back
 .result-item { padding: 6px 0; border-bottom: 1px solid var(--border-soft); font-size: 13px; }
 .result-item .mono { font-size: 11px; }
 .result-err { color: var(--fg); margin: 3px 0; font-size: 12px; }
+
+/* ---------- background jobs ---------- */
+#jobs { display: grid; gap: 8px; padding: 0 12px; }
+#jobs:not(:empty) { padding-top: 8px; padding-bottom: 8px; border-top: 1px solid var(--border-soft); }
+.job { border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; background: var(--bg); font-size: 12px; display: grid; gap: 5px; box-shadow: var(--shadow); }
+.job.failed { border-color: var(--red); }
+.job.ok { border-color: var(--green); }
+.job-top { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.job-title { font-weight: 600; font-size: 13px; }
+.bar { height: 6px; border-radius: 999px; background: var(--bg-sunk); overflow: hidden; }
+.bar .fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width .4s ease; }
+.job.running .bar .fill { background-image: linear-gradient(90deg, var(--accent), color-mix(in srgb, var(--accent) 55%, #fff), var(--accent)); background-size: 200% 100%; animation: shimmer 1.4s linear infinite; }
+.job.ok .bar .fill { background: var(--green); }
+.job.failed .bar .fill { background: var(--red); }
+@keyframes shimmer { to { background-position: -200% 0; } }
+.job-line { color: var(--fg-muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-line strong { color: var(--fg); }
+.job-line .bad, .job-fail { color: var(--red); }
+.job-fail { font-size: 11px; }
+.job .actions { gap: 10px; }
+.chip.busy-chip { color: var(--amber); border-color: currentColor; }
+@media (prefers-reduced-motion: reduce) { .job.running .bar .fill { animation: none; } }
