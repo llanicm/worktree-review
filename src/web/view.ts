@@ -3,11 +3,11 @@ import type { Comment, Commit, Worktree } from '../shared/api.ts';
 import { crButtonHtml, crPanelHtml } from './coderabbit.ts';
 import { cleanupPageHtml } from './cleanup.ts';
 import { keyOf } from './diff.ts';
-import { commitClass, renderFile, threadHtml } from './file.ts';
+import { commitClass, placedCommentIds, renderFile, threadHtml } from './file.ts';
 import { headerHtml } from './header.ts';
 import { setupHtml } from './setup.ts';
 import { curWt, need, S, st, view } from './state.ts';
-import type { View } from './types.ts';
+import type { CommitGroup, View } from './types.ts';
 import { ago, esc, md } from './util.ts';
 
 export function renderMain() {
@@ -27,13 +27,7 @@ export function renderMain() {
   }
   if (!S.view || S.view.wtId !== wt.id) { main.innerHTML = `<div class="page">${headerHtml(wt)}<div class="file-note">Loading diff…</div></div>`; return; }
   const v = S.view;
-  const byAnchor = new Map<string, Comment[]>();
-  for (const c of v.comments) {
-    const k = keyOf(c.file, c.side, c.line, c.commit);
-    const here = byAnchor.get(k);
-    if (here) here.push(c); else byAnchor.set(k, [c]);
-  }
-  const used = new Set<string>();
+  const byAnchor = commentsByAnchor(v.comments);
   const mode = v.diff.mode;
   const since = mode === 'since';
   const byCommit = mode === 'commits';
@@ -41,24 +35,13 @@ export function renderMain() {
   const hiddenCommits = v.diff.mode === 'commits' ? v.diff.hiddenCommits : 0;
   let filesHtml;
   if (byCommit) {
-    filesHtml = groups.map((g) => {
-      const shut = S.shutCommits.has(g.n);
-      return `<section class="commit-group ${commitClass(g.n)} ${shut ? 'shut' : ''}" id="cg-${g.n}">
-      <div class="commit-head"><button class="caret" data-act="toggle-commit" data-n="${g.n}" aria-expanded="${!shut}" aria-label="${shut ? 'Expand' : 'Collapse'} this commit" title="${shut ? 'Expand' : 'Collapse'} this commit">${shut ? '▸' : '▾'}</button><span class="cnum">${g.n ? `#${g.n}` : '±'}</span>
-        <span class="commit-title">${esc(g.subject)}</span>
-        <span class="muted small">${g.sha ? `<span class="mono">${g.sha.slice(0, 8)}</span> · ${esc(g.author)} · ${ago(g.time)} · ` : ''}${g.files.length} file${g.files.length === 1 ? '' : 's'}</span></div>
-      ${shut || !g.body ? '' : commitBodyHtml(g.body, g.n)}
-      ${shut ? '' : `<div class="commit-files">${g.truncated ? '<div class="callout warn small">This commit is too large to show in full.</div>' : ''}
-      ${g.files.map((f) => renderFile(f, byAnchor, used)).join('') || '<div class="file-note">No file changes.</div>'}</div>`}
-    </section>`;
-    }).join('') + (hiddenCommits ? `<div class="callout small">${hiddenCommits} older commits aren't shown.</div>` : '');
+    filesHtml = groups.map((g) => groupHtml(g, byAnchor)).join('') + (hiddenCommits ? `<div class="callout small">${hiddenCommits} older commits aren't shown.</div>` : '');
   } else {
-    filesHtml = v.files.map((f) => renderFile(f, byAnchor, used)).join('');
+    filesHtml = v.files.map((f) => renderFile(f, byAnchor)).join('');
   }
-  const unplaced = v.comments.filter((c) => !used.has(c.id) && c.status !== 'resolved');
-  // Comments that belong to this view but whose file isn't shown, vs comments made in the other view.
-  const orphan = unplaced.filter((c) => (byCommit ? !!c.commit : !c.commit));
-  const otherView = unplaced.filter((c) => (byCommit ? !c.commit : !!c.commit));
+  const { orphan, otherView } = unplacedComments(v);
+  const orphanPanel = orphanHtml(orphan);
+  v.orphanHtml = orphanPanel;
   const viewedCount = v.files.filter((f) => v.diff.viewed[f.path] === f.hash).length;
 
   v.headerSig = headerSig(wt);
@@ -78,18 +61,14 @@ export function renderMain() {
       <div class="actions">
         ${S.stale ? '<span class="banner">New changes landed. <button class="btn small" data-act="refresh">Refresh</button></span>' : ''}
         ${crButtonHtml(wt)}
-        ${byCommit && groups.every((g) => S.shutCommits.has(g.n))
-          ? '<button class="btn" data-act="expand-all">Expand all</button>'
-          : '<button class="btn" data-act="collapse-all">Collapse all</button>'}
+        ${collapseAllHtml(v)}
         <button class="btn" data-act="mark-reviewed" title="Remember this exact state so you can see only what changes next">Mark as reviewed</button>
       </div>
     </div>
     ${crPanelHtml(wt)}
     ${v.diff.mode !== 'commits' && v.diff.truncated ? '<div class="callout warn">This diff is very large and was cut off.</div>' : ''}
-    ${orphan.length ? `<div class="panel"><div class="panel-head">Comments on files not in this view</div><div class="panel-body threads">${orphan.map((c) => `<div class="mono">${esc(c.file)}:${c.line}</div>${threadHtml(c)}`).join('')}</div></div>` : ''}
-    ${otherView.length ? `<details class="panel"><summary class="panel-head" style="cursor:pointer">${otherView.length} comment${otherView.length === 1 ? '' : 's'} made in the ${byCommit ? 'All changes' : 'By commit'} view
-        <button class="btn small" data-act="mode" data-mode="${byCommit ? 'full' : 'commits'}">Show there</button></summary>
-      <div class="panel-body threads">${otherView.map((c) => `<div class="mono">${esc(c.file)}:${c.line}${c.commit ? ` · ${c.commit.slice(0, 8)}` : ''}</div>${threadHtml(c)}`).join('')}</div></details>` : ''}
+    ${orphanPanel}
+    ${otherViewHtml(otherView, byCommit)}
     ${byCommit ? filesHtml : v.files.length ? filesSummaryHtml(v) + filesHtml : `<div class="callout">${since ? 'Nothing has changed since your last review.' : `No changes against <code>${esc(v.diff.baseRef)}</code>.`}</div>`}
   </div>
   ${reviewBarHtml(wt)}`;
@@ -106,6 +85,45 @@ export function renderMain() {
     S.focusEk = null;
   }
 }
+
+export const commentsByAnchor = (comments: Comment[]) => {
+  const byAnchor = new Map<string, Comment[]>();
+  for (const c of comments) {
+    const k = keyOf(c.file, c.side, c.line, c.commit);
+    const here = byAnchor.get(k);
+    if (here) here.push(c); else byAnchor.set(k, [c]);
+  }
+  return byAnchor;
+};
+
+// One commit section of the By commit view. Shared by the full render and the in-place collapse patches (collapse.ts).
+export function groupHtml(g: CommitGroup, byAnchor: Map<string, Comment[]>) {
+  const shut = S.shutCommits.has(g.n);
+  return `<section class="commit-group ${commitClass(g.n)} ${shut ? 'shut' : ''}" id="cg-${g.n}">
+      <div class="commit-head"><button class="caret" data-act="toggle-commit" data-n="${g.n}" aria-expanded="${!shut}" aria-label="${shut ? 'Expand' : 'Collapse'} this commit" title="${shut ? 'Expand' : 'Collapse'} this commit">${shut ? '▸' : '▾'}</button><span class="cnum">${g.n ? `#${g.n}` : '±'}</span>
+        <span class="commit-title">${esc(g.subject)}</span>
+        <span class="muted small">${g.sha ? `<span class="mono">${g.sha.slice(0, 8)}</span> · ${esc(g.author)} · ${ago(g.time)} · ` : ''}${g.files.length} file${g.files.length === 1 ? '' : 's'}</span></div>
+      ${shut || !g.body ? '' : commitBodyHtml(g.body, g.n)}
+      ${shut ? '' : `<div class="commit-files">${g.truncated ? '<div class="callout warn small">This commit is too large to show in full.</div>' : ''}
+      ${g.files.map((f) => renderFile(f, byAnchor)).join('') || '<div class="file-note">No file changes.</div>'}</div>`}
+    </section>`;
+}
+
+// Comments that belong to this view but whose file isn't shown, vs comments made in the other view.
+export function unplacedComments(v: View) {
+  const byCommit = v.diff.mode === 'commits';
+  const placed = placedCommentIds(v);
+  const unplaced = v.comments.filter((c) => !placed.has(c.id) && c.status !== 'resolved');
+  return { orphan: unplaced.filter((c) => (byCommit ? !!c.commit : !c.commit)), otherView: unplaced.filter((c) => (byCommit ? !c.commit : !!c.commit)) };
+}
+export const orphanHtml = (orphan: Comment[]) => orphan.length ? `<div class="panel"><div class="panel-head">Comments on files not in this view</div><div class="panel-body threads">${orphan.map((c) => `<div class="mono">${esc(c.file)}:${c.line}</div>${threadHtml(c)}`).join('')}</div></div>` : '';
+const otherViewHtml = (otherView: Comment[], byCommit: boolean) => otherView.length ? `<details class="panel"><summary class="panel-head" style="cursor:pointer">${otherView.length} comment${otherView.length === 1 ? '' : 's'} made in the ${byCommit ? 'All changes' : 'By commit'} view
+        <button class="btn small" data-act="mode" data-mode="${byCommit ? 'full' : 'commits'}">Show there</button></summary>
+      <div class="panel-body threads">${otherView.map((c) => `<div class="mono">${esc(c.file)}:${c.line}${c.commit ? ` · ${c.commit.slice(0, 8)}` : ''}</div>${threadHtml(c)}`).join('')}</div></details>` : '';
+
+export const collapseAllHtml = (v: View) => v.diff.mode === 'commits' && (v.groups ?? []).every((g) => S.shutCommits.has(g.n))
+  ? '<button class="btn" data-act="expand-all">Expand all</button>'
+  : '<button class="btn" data-act="collapse-all">Collapse all</button>';
 
 export const headerSig = (wt: Worktree) => JSON.stringify([wt.sessions, wt.pr, wt.cleanup, wt.ahead, wt.dirty, wt.baseRef, wt.baseError, wt.error, wt.busy, S.removeErrors[wt.id], st().sessions.length, st().config]);
 
@@ -126,7 +144,7 @@ function commitsHtml(commits: Commit[], wt: Worktree) {
 }
 
 const TRAILER = /^[A-Z][A-Za-z-]+: .+/;
-function commitBodyHtml(body: string, n: number) {
+export function commitBodyHtml(body: string, n: number) {
   const lines = body.split('\n');
   // Trailers (Co-Authored-By:, Signed-off-by:, Refs:) are the last paragraph of key: value lines.
   let cut = lines.length;

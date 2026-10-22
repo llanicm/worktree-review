@@ -3,7 +3,7 @@ import type { Comment, Finding } from '../shared/api.ts';
 import { findingHtml } from './coderabbit.ts';
 import { hl, keyOf, langFor, sameCommit } from './diff.ts';
 import { curWt, S, view } from './state.ts';
-import type { ViewFile } from './types.ts';
+import type { View, ViewFile } from './types.ts';
 import { ago, editorLink, editorName, esc, fnv, md } from './util.ts';
 
 export const commitClass = (n: number) => (n === 0 ? 'cu' : `c${((n - 1) % 8) + 1}`);
@@ -30,8 +30,7 @@ export function isCollapsed(f: ViewFile) {
   return (!f.commit && view().diff.viewed[f.path] === f.hash) || f.generated;
 }
 
-// TODO(api.ts): Comment has no `deliveredTo`, but the server sets { sessionId, name } when it delivers one.
-function statusLabel(c: Comment & { deliveredTo?: { sessionId: string; name: string } }) {
+function statusLabel(c: Comment) {
   if (c.status === 'draft') return 'Draft';
   if (c.status === 'pending') return 'Submitted · waiting for a session';
   if (c.status === 'delivered') return `Sent to ${c.deliveredTo?.name || 'Claude'}`;
@@ -63,9 +62,53 @@ export function threadHtml(c: Comment) {
   return `<div class="thread ${c.status}">${msgs.join('')}${acts.length ? `<div class="thread-actions">${acts.join('')}</div>` : ''}</div>`;
 }
 
-export function renderFile(f: ViewFile, byAnchor: Map<string, Comment[]>, used: Set<string>) {
+/** What a file's body shows; the one place that decides it, for both the full render and in-place collapse patches. */
+export type BodyKind = 'collapsed' | 'binary' | 'empty' | 'large' | 'rows';
+export function bodyKind(f: ViewFile): BodyKind {
+  if (isCollapsed(f)) return 'collapsed';
+  if (f.binary) return 'binary';
+  if (!f.hunks.length) return 'empty';
+  if (f.lineCount > 2500 && !S.forceRender.has(f.uid)) return 'large';
+  return 'rows';
+}
+
+/** Lines this diff actually shows; anything anchored elsewhere goes in the "not on a changed line" block. */
+function shownKeys(f: ViewFile) {
+  const shown = new Set<string>();
+  for (const h of f.hunks) for (const l of h.lines) shown.add(l.t === 'del' ? keyOf(f.path, 'old', l.o, f.commit) : keyOf(f.path, 'new', l.n, f.commit));
+  return shown;
+}
+
+/**
+ * Open comments that end up in some rendered file: on a line row, or in its "not on a changed line" block
+ * (that block is built even for a collapsed file). Files whose rows aren't rendered (collapsed, binary, too large,
+ * or in a collapsed commit) leave their on-a-line comments out, so they surface in "Comments on files not in this view".
+ */
+export function placedCommentIds(v: View) {
+  const placed = new Set<string>();
+  const byFile = new Map<string, Comment[]>();
+  for (const c of v.comments) {
+    if (c.status === 'resolved') continue;
+    const k = `${c.commit || ''}\0${c.file}`;
+    const here = byFile.get(k);
+    if (here) here.push(c); else byFile.set(k, [c]);
+  }
+  if (!byFile.size) return placed;
+  const files = v.diff.mode === 'commits' ? (v.groups ?? []).filter((g) => !S.shutCommits.has(g.n)).flatMap((g) => g.files) : v.files;
+  for (const f of files) {
+    const mine = byFile.get(`${f.commit || ''}\0${f.path}`);
+    if (!mine) continue;
+    const rows = bodyKind(f) === 'rows';
+    const shown = rows ? null : shownKeys(f);
+    for (const c of mine) if (!shown || !shown.has(keyOf(c.file, c.side, c.line, c.commit))) placed.add(c.id);
+  }
+  return placed;
+}
+
+export function renderFile(f: ViewFile, byAnchor: Map<string, Comment[]>) {
   const v = view();
-  const collapsed = isCollapsed(f);
+  const kind = bodyKind(f);
+  const collapsed = kind === 'collapsed';
   const viewed = v.diff.viewed[f.path] === f.hash;
   const wt = curWt();
   const name = f.status === 'renamed' && f.oldPath !== f.newPath
@@ -76,9 +119,7 @@ export function renderFile(f: ViewFile, byAnchor: Map<string, Comment[]>, used: 
 
   let body;
   const lang = langFor(f.path);
-  // Lines this diff actually shows; anything anchored elsewhere goes in the "not on a changed line" block.
-  const shown = new Set<string>();
-  for (const h of f.hunks) for (const l of h.lines) shown.add(l.t === 'del' ? keyOf(f.path, 'old', l.o, f.commit) : keyOf(f.path, 'new', l.n, f.commit));
+  const shown = shownKeys(f);
   const mine = (v.comments || []).filter((c) => c.file === f.path && sameCommit(c.commit, f.commit) && c.status !== 'resolved');
   const outsideComments = mine.filter((c) => !shown.has(keyOf(c.file, c.side, c.line, c.commit)));
   const fileFindings = f.commit ? [] : (v.cr?.findings || []).filter((x) => x.file === f.path && x.status === 'open');
@@ -96,10 +137,10 @@ export function renderFile(f: ViewFile, byAnchor: Map<string, Comment[]>, used: 
     ${f.status !== 'deleted' && wt && editorLink(wt.path) ? `<a class="file-tag" href="${esc(editorLink(`${wt.path}/${f.path}`, firstLine))}" title="Open in ${editorName()}">open</a>` : ''}
     ${f.commit ? '' : `<label class="viewed-box ${viewed ? 'on' : ''}"><input type="checkbox" data-act="viewed" data-file="${esc(f.path)}" ${viewed ? 'checked' : ''}> Viewed</label>`}
   </div>`;
-  if (collapsed) body = '';
-  else if (f.binary) body = '<div class="file-note">Binary file</div>';
-  else if (!f.hunks.length) body = `<div class="file-note">${f.status === 'renamed' ? 'Renamed without changes' : 'No content changes (mode change or empty file)'}</div>`;
-  else if (f.lineCount > 2500 && !S.forceRender.has(f.uid)) body = `<div class="file-note">Large diff (${f.lineCount} lines). <button class="link-btn" data-act="force-render" data-file="${esc(f.uid)}">Load it</button></div>`;
+  if (kind === 'collapsed') body = '';
+  else if (kind === 'binary') body = '<div class="file-note">Binary file</div>';
+  else if (kind === 'empty') body = `<div class="file-note">${f.status === 'renamed' ? 'Renamed without changes' : 'No content changes (mode change or empty file)'}</div>`;
+  else if (kind === 'large') body = `<div class="file-note">Large diff (${f.lineCount} lines). <button class="link-btn" data-act="force-render" data-file="${esc(f.uid)}">Load it</button></div>`;
   else {
     const rows: string[] = [];
     for (const h of f.hunks) {
@@ -115,7 +156,6 @@ export function renderFile(f: ViewFile, byAnchor: Map<string, Comment[]>, used: 
         rows.push(`<tr class="line ${l.t}" data-k="${esc(k)}"${cAttr}><td class="num" data-act="new-comment" data-k="${esc(k)}">${l.o ?? ''}</td><td class="num" data-act="new-comment" data-k="${esc(k)}">${l.n ?? ''}</td><td class="code">${cBar}<button class="add-c" data-act="new-comment" data-k="${esc(k)}" title="Comment on this line">+</button><span class="sign">${sign}</span>${hl(l.text, lang)}</td></tr>`);
         const crHere: Finding[] = side === 'new' ? (v.crByAnchor?.get(k) || []) : [];
         const threads = (byAnchor.get(k) || []);
-        threads.forEach((c) => used.add(c.id));
         const ek = `new:${k}`;
         if (threads.length || crHere.length || S.editors.has(ek)) {
           rows.push(`<tr class="thread-row"><td colspan="3"><div class="threads">${crHere.map((f) => findingHtml(f, true)).join('')}${threads.map(threadHtml).join('')}${S.editors.has(ek) ? editorHtml(ek, 'Add comment') : ''}</div></td></tr>`);
@@ -127,7 +167,7 @@ export function renderFile(f: ViewFile, byAnchor: Map<string, Comment[]>, used: 
   const snippet = (line: number | null | undefined, text: string | undefined) => `<div class="outside-line"><span class="outside-no">${line ?? ''}</span><code>${text ? hl(text, lang) : '<span class="muted">(line not available)</span>'}</code></div>`;
   const outsideItems = [
     ...outsideFindings.map((x) => ({ line: x.startLine, html: snippet(x.startLine, x.snippet) + findingHtml(x, true) })),
-    ...outsideComments.map((c) => { used.add(c.id); return { line: c.line, html: snippet(c.line, c.lineText) + threadHtml(c) }; }),
+    ...outsideComments.map((c) => ({ line: c.line, html: snippet(c.line, c.lineText) + threadHtml(c) })),
   ].sort((a, b) => (a.line || 0) - (b.line || 0));
   const out = outsideItems.length && !collapsed
     ? `<div class="outdated"><div class="outdated-label">Not on a changed line, so shown here</div><div class="threads">${outsideItems.map((i) => i.html).join('')}</div></div>` : '';

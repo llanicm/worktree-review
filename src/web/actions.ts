@@ -1,6 +1,7 @@
 // ---------- actions (data-act event delegation) ----------
 import type { CodeRabbitReview, Integrations, RepairResult } from '../shared/api.ts';
 import { indexFindings, loadCodeRabbit } from './coderabbit.ts';
+import { collapseAll, expandAll, toggleBody, toggleCommit, toggleFile } from './collapse.ts';
 import { cleanPicked, cleanupGroups } from './cleanup.ts';
 import { keyOf, parseKey, sameCommit } from './diff.ts';
 import { fileCommitsOf, isCollapsed } from './file.ts';
@@ -66,26 +67,14 @@ export const actions: Record<string, Action> = {
   reopen: async (el) => { await api('POST', `/api/comments/${attr(el, 'id')}/reopen`); await reloadComments(); },
   'toggle-file': (el) => {
     const f = view().files.find((x) => x.uid === attr(el, 'file'));
-    if (!f) return;
-    S.toggled.set(f.uid, !isCollapsed(f));
-    renderMain();
+    if (f) toggleFile(f);
   },
-  'collapse-all': () => {
-    const v = view();
-    if (v.diff.mode === 'commits') for (const g of v.groups ?? []) S.shutCommits.add(g.n);
-    else for (const f of v.files) S.toggled.set(f.uid, true);
-    renderMain();
-  },
-  'expand-all': () => { S.shutCommits.clear(); renderMain(); },
-  'toggle-body': (el) => {
-    const n = Number(attr(el, 'n'));
-    if (S.openBodies.has(n)) S.openBodies.delete(n); else S.openBodies.add(n);
-    renderMain();
-  },
+  'collapse-all': () => collapseAll(view()),
+  'expand-all': () => expandAll(view()),
+  'toggle-body': (el) => toggleBody(Number(attr(el, 'n'))),
   'toggle-commit': (el) => {
     const n = Number(attr(el, 'n'));
-    if (S.shutCommits.has(n)) S.shutCommits.delete(n); else S.shutCommits.add(n);
-    renderMain();
+    toggleCommit(n);
     // Keep the header you clicked in view; collapsing can pull the page up under the cursor.
     document.getElementById(`cg-${n}`)?.scrollIntoView({ block: 'nearest' });
   },

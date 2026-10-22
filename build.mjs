@@ -32,24 +32,9 @@ function copyStatic(out) {
   for (const f of fs.readdirSync(from)) fs.copyFileSync(path.join(from, f), path.join(out, 'public', f));
 }
 
-// TRANSITIONAL: while src/ is being written, an entry point that doesn't exist yet falls back
-// to the old JavaScript file. Remove once server/ is gone.
-const LEGACY = { 'src/server/main.ts': ['server/server.mjs', 'server.mjs'], 'src/web/app.ts': ['server/public/app.js', 'public/app.js'], 'src/web/worker/sse-worker.ts': ['server/public/sse-worker.js', 'public/sse-worker.js'], 'src/scripts/hook.ts': ['scripts/hook.mjs', 'scripts/hook.mjs'], 'src/scripts/ensure-server.ts': ['scripts/ensure-server.mjs', 'scripts/ensure-server.mjs'] };
-
 async function build(out) {
   fs.rmSync(out, { recursive: true, force: true });
-  const jobs = [];
-  for (const o of options(out)) {
-    const entries = Object.fromEntries(Object.entries(o.entryPoints).filter(([, src]) => {
-      if (fs.existsSync(path.join(ROOT, src))) return true;
-      const [from, to] = LEGACY[src];
-      fs.mkdirSync(path.dirname(path.join(out, to)), { recursive: true });
-      fs.copyFileSync(path.join(ROOT, from), path.join(out, to));
-      return false;
-    }));
-    if (Object.keys(entries).length) jobs.push(esbuild.build({ ...o, entryPoints: entries }));
-  }
-  await Promise.all(jobs);
+  await Promise.all(options(out).map((o) => esbuild.build(o)));
   copyStatic(out);
 }
 

@@ -79,6 +79,8 @@ export interface View {
   /** Open findings by "file|new|line" anchor. */
   crByAnchor?: Map<string, Finding[]>;
   headerSig?: string;
+  /** The "Comments on files not in this view" panel as last rendered, so in-place patches know whether it changed. */
+  orphanHtml?: string;
 }
 
 export interface Picker {

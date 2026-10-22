@@ -3,21 +3,21 @@
     "SessionStart": [
       {
         "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/ensure-server.mjs\"", "timeout": 10 }
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/scripts/ensure-server.mjs\"", "timeout": 10 }
         ]
       }
     ],
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hook.mjs\"", "timeout": 5 }
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/scripts/hook.mjs\"", "timeout": 5 }
         ]
       }
     ],
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/scripts/hook.mjs\"", "timeout": 5 }
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/scripts/hook.mjs\"", "timeout": 5 }
         ]
       }
     ]

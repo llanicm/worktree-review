@@ -17,7 +17,7 @@ cat > "$PLIST" <<EOF
 <plist version="1.0">
 <dict>
   <key>Label</key><string>$LABEL</string>
-  <key>ProgramArguments</key><array><string>$NODE</string><string>$DIR/server/server.mjs</string></array>
+  <key>ProgramArguments</key><array><string>$NODE</string><string>$DIR/dist/server.mjs</string></array>
   <key>WorkingDirectory</key><string>$DIR</string>
   <key>EnvironmentVariables</key><dict>
     <key>PATH</key><string>$(dirname "$NODE"):/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
