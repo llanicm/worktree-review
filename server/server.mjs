@@ -578,6 +578,86 @@ async function snapshotTree(wt) {
   }
 }
 
+const DIFF_ARGS = ['diff', '--no-color', '--no-ext-diff', '-M', '--src-prefix=a/', '--dst-prefix=b/'];
+const MAX_DIFF = 30 * 1024 * 1024;
+
+async function branchCommits(wt) {
+  // Oldest first, so commit #1 is where the branch starts.
+  return (await git(wt.path, ['log', '--reverse', '--format=%H%x09%ct%x09%an%x09%s', `${wt.mergeBase}..HEAD`]))
+    .split('\n').filter(Boolean).map((l, i) => {
+      const [sha, ct, author, ...subject] = l.split('\t');
+      return { n: i + 1, sha, time: Number(ct) * 1000, author, subject: subject.join('\t') };
+    });
+}
+
+// Which commits touched each file (by commit number), plus 0 for uncommitted changes.
+async function fileCommitMap(wt, commits, tree) {
+  const map = {};
+  const byShaN = new Map(commits.map((c) => [c.sha, c.n]));
+  if (commits.length) {
+    const out = await git(wt.path, ['log', '--reverse', '--format=@%H', '--name-only', '-M', `${wt.mergeBase}..HEAD`]);
+    let n = null;
+    for (const line of out.split('\n')) {
+      if (line.startsWith('@')) n = byShaN.get(line.slice(1));
+      else if (line && n) (map[line] ||= []).includes(n) || map[line].push(n);
+    }
+  }
+  const dirty = await git(wt.path, ['diff', '--name-only', '-M', 'HEAD', tree]);
+  for (const f of dirty.split('\n').filter(Boolean)) (map[f] ||= []).push(0);
+  return map;
+}
+
+// Per-line attribution for the working version of each changed file: runs of
+// [startLine, endLine, commitNumber], where 0 means not committed yet.
+async function blameWorktree(wt, files, commits) {
+  const byShaN = new Map(commits.map((c) => [c.sha, c.n]));
+  const result = {};
+  await Promise.all(files.slice(0, 200).map(async (file) => {
+    const abs = path.join(wt.path, file);
+    try { if (fs.statSync(abs).size > 2 * 1024 * 1024) return; } catch { return; }
+    let out;
+    try { out = await git(wt.path, ['blame', '--porcelain', '--contents', abs, `${wt.mergeBase}..`, '--', file], { timeout: 20_000 }); } catch { return; }
+    const runs = [];
+    for (const line of out.split('\n')) {
+      const m = line.match(/^([0-9a-f]{40}) \d+ (\d+)/);
+      if (!m) continue;
+      const n = /^0{40}$/.test(m[1]) ? 0 : byShaN.get(m[1]);
+      if (n === undefined) continue; // from before the branch
+      const ln = Number(m[2]);
+      const last = runs[runs.length - 1];
+      if (last && last[2] === n && last[1] === ln - 1) last[1] = ln; else runs.push([ln, ln, n]);
+    }
+    if (runs.length) result[file] = runs;
+  }));
+  return result;
+}
+
+async function getBlame(wt) {
+  await refreshWorktree(wt);
+  if (!wt.mergeBase) throw httpError(409, wt.baseError || 'No merge base');
+  if (wt.blame?.fp === wt.fingerprint) return wt.blame.data;
+  const fp = wt.fingerprint;
+  const tree = await snapshotTree(wt);
+  const commits = await branchCommits(wt);
+  const files = (await git(wt.path, ['diff', '--name-only', '--diff-filter=d', '-M', wt.mergeBase, tree])).split('\n').filter(Boolean);
+  const data = { fingerprint: fp, lines: await blameWorktree(wt, files, commits) };
+  wt.blame = { fp, data };
+  return data;
+}
+
+async function getCommitDiffs(wt, tree, commits) {
+  const shown = commits.slice(-100);
+  let budget = MAX_DIFF;
+  const out = [];
+  for (const c of shown) {
+    const diff = budget > 0 ? await git(wt.path, [...DIFF_ARGS, `${c.sha}^`, c.sha]).catch(() => '') : '';
+    budget -= diff.length;
+    out.push({ ...c, diff: diff.slice(0, Math.max(0, budget + diff.length)), truncated: budget < 0 });
+  }
+  const uncommitted = await git(wt.path, [...DIFF_ARGS, 'HEAD', tree]);
+  return { commits: out, hiddenCommits: commits.length - shown.length, uncommitted: uncommitted.slice(0, MAX_DIFF) };
+}
+
 async function getDiff(wt, mode) {
   await refreshWorktree(wt);
   if (!wt.mergeBase) throw httpError(409, wt.baseError || 'No merge base');
@@ -587,20 +667,21 @@ async function getDiff(wt, mode) {
   let sinceAvailable = false;
   if (s.reviewedTree) sinceAvailable = await gitOk(wt.path, ['cat-file', '-e', `${s.reviewedTree}^{tree}`]);
   if (mode === 'since' && sinceAvailable) from = s.reviewedTree;
-  const diff = await git(wt.path, ['diff', '--no-color', '--no-ext-diff', '-M', '--src-prefix=a/', '--dst-prefix=b/', from, tree]);
-  const commits = (await git(wt.path, ['log', '--format=%H%x09%ct%x09%an%x09%s', `${wt.mergeBase}..HEAD`]))
-    .split('\n').filter(Boolean).map((l) => {
-      const [sha, ct, author, ...subject] = l.split('\t');
-      return { sha, time: Number(ct) * 1000, author, subject: subject.join('\t') };
-    });
-  return {
-    mode: from === wt.mergeBase ? 'full' : 'since',
+  const commits = await branchCommits(wt);
+  const base = {
     sinceAvailable, reviewedAt: s.reviewedAt || null,
     fingerprint: wt.fingerprint, tree, mergeBase: wt.mergeBase,
     baseRef: wt.baseRef, baseSource: wt.baseSource, commits,
     viewed: s.viewed || {},
-    truncated: diff.length > 30 * 1024 * 1024,
-    diff: diff.slice(0, 30 * 1024 * 1024),
+  };
+  if (mode === 'commits') return { ...base, mode: 'commits', ...(await getCommitDiffs(wt, tree, commits)) };
+  const diff = await git(wt.path, [...DIFF_ARGS, from, tree]);
+  return {
+    fileCommits: await fileCommitMap(wt, commits, tree),
+    ...base,
+    mode: from === wt.mergeBase ? 'full' : 'since',
+    truncated: diff.length > MAX_DIFF,
+    diff: diff.slice(0, MAX_DIFF),
   };
 }
 
@@ -613,7 +694,8 @@ function reviewPrompt(wt, review, comments) {
   lines.push('This review was left in the Worktree Review dashboard. Address each comment in that worktree.');
   if (review?.summary) lines.push('', '### Overall', '', review.summary);
   for (const c of comments) {
-    lines.push('', `### ${c.file}:${c.line}${c.side === 'old' ? ' (removed line)' : ''}  [${c.id}]`);
+    const where = c.commit ? ` (as of commit ${c.commit.slice(0, 8)}${c.commitSubject ? ` "${c.commitSubject}"` : ''})` : '';
+    lines.push('', `### ${c.file}:${c.line}${c.side === 'old' ? ' (removed line)' : ''}${where}  [${c.id}]`);
     if (c.lineText) lines.push('', '```', c.lineText, '```');
     lines.push('', c.body);
     for (const r of c.replies || []) lines.push('', `> **${r.author === 'you' ? 'Reviewer' : 'Claude'}:** ${r.body.replace(/\n/g, '\n> ')}`);
@@ -1033,6 +1115,7 @@ function getComment(id) {
 const routes = [
   ['GET', /^\/api\/state$/, () => publicState()],
   ['GET', /^\/api\/worktrees\/(\w+)\/diff$/, (m, body, url) => getDiff(getWt(m[1]), url.searchParams.get('mode'))],
+  ['GET', /^\/api\/worktrees\/(\w+)\/blame$/, (m) => getBlame(getWt(m[1]))],
   ['GET', /^\/api\/worktrees\/(\w+)\/comments$/, (m) => {
     getWt(m[1]);
     return {
@@ -1135,6 +1218,8 @@ const routes = [
     const c = {
       id: newId('c'), wtId: wt.id, wtPath: wt.path, file: body.file, line: body.line, side: body.side,
       lineText: body.lineText, body: body.body.trim(), status: 'draft', createdAt: Date.now(), replies: [],
+      commit: /^[0-9a-f]{40}$/.test(body.commit || '') ? body.commit : undefined,
+      commitSubject: body.commitSubject || undefined,
     };
     state.comments.push(c);
     save();

@@ -12,6 +12,12 @@ lands, before anything becomes a PR.
   It's taken against the PR's base, the branch it's stacked on, or `origin/main`, and you can
   change the base. *Mark as reviewed* remembers the exact state, so *Since last review*
   shows only what's new. You can tick off files as viewed.
+- **See the order it happened in.** Commits are numbered oldest first, each with its own colour.
+  In *All changes*, files are ordered by the commit that first touched them, each file header
+  lists its commits, and every added line has a coloured bar for the commit that introduced it.
+  Click a commit to highlight its lines. *By commit* replays the branch one commit at a time and
+  ends with the uncommitted changes. Comments made there remember their commit, and Claude is
+  told which one.
 - **Comment, and Claude gets it.** Click `+` on any line. *Send to Claude* delivers the
   review to the session working in that worktree, when it finishes its current turn or
   with your next message to it. Claude resolves each comment with a note or replies.

@@ -238,11 +238,29 @@ function hl(text, lang) {
 // ---------- main view ----------
 
 const curWt = () => S.st?.worktrees.find((w) => w.id === S.selId);
-const keyOf = (file, side, line) => `${file}|${side}|${line}`;
+const keyOf = (file, side, line, commit) => `${commit ? `${commit}~` : ''}${file}|${side}|${line}`;
+function parseKey(k) {
+  const m = k.match(/^([0-9a-f]{40})~(.*)$/);
+  const rest = m ? m[2] : k;
+  const i = rest.lastIndexOf('|'), j = rest.lastIndexOf('|', i - 1);
+  return { commit: m ? m[1] : null, file: rest.slice(0, j), side: rest.slice(j + 1, i), line: Number(rest.slice(i + 1)) };
+}
+const sameCommit = (a, b) => (a || null) === (b || null);
+const commitClass = (n) => (n === 0 ? 'cu' : `c${((n - 1) % 8) + 1}`);
+const commitLabel = (n) => (n === 0 ? 'uncommitted' : `#${n}`);
+
+// Commit number (0 = uncommitted) that last touched line n of a file, from blame runs.
+function commitOfLine(file, n) {
+  const b = S.view?.blame?.lines?.[file];
+  if (!b) return undefined;
+  for (const [a, z, c] of b) if (n >= a && n <= z) return c;
+  return undefined;
+}
+function commitByN(n) { return S.view?.diff.commits.find((c) => c.n === n); }
 
 function isCollapsed(f) {
-  if (S.toggled.has(f.path)) return S.toggled.get(f.path);
-  return S.view.diff.viewed[f.path] === f.hash || f.generated;
+  if (S.toggled.has(f.uid)) return S.toggled.get(f.uid);
+  return (!f.commit && S.view.diff.viewed[f.path] === f.hash) || f.generated;
 }
 
 function statusLabel(c) {
@@ -291,23 +309,27 @@ function renderFile(f, byAnchor, used) {
   const lang = langFor(f.path);
   // Lines this diff actually shows; anything anchored elsewhere goes in the "not on a changed line" block.
   const shown = new Set();
-  for (const h of f.hunks) for (const l of h.lines) shown.add(l.t === 'del' ? keyOf(f.path, 'old', l.o) : keyOf(f.path, 'new', l.n));
-  const outsideComments = (S.view.comments || []).filter((c) => c.file === f.path && c.status !== 'resolved' && !shown.has(keyOf(c.file, c.side, c.line)));
-  const fileFindings = (S.view.cr?.findings || []).filter((x) => x.file === f.path && x.status === 'open');
+  for (const h of f.hunks) for (const l of h.lines) shown.add(l.t === 'del' ? keyOf(f.path, 'old', l.o, f.commit) : keyOf(f.path, 'new', l.n, f.commit));
+  const mine = (S.view.comments || []).filter((c) => c.file === f.path && sameCommit(c.commit, f.commit) && c.status !== 'resolved');
+  const outsideComments = mine.filter((c) => !shown.has(keyOf(c.file, c.side, c.line, c.commit)));
+  const fileFindings = f.commit ? [] : (S.view.cr?.findings || []).filter((x) => x.file === f.path && x.status === 'open');
   const outsideFindings = fileFindings.filter((x) => !shown.has(keyOf(x.file, 'new', x.endLine || x.startLine)));
-  const nOpen = (S.view.comments || []).filter((c) => c.file === f.path && c.status !== 'resolved').length + fileFindings.length;
+  const nOpen = mine.length + fileFindings.length;
+  const touched = !f.commit ? (S.view.diff.fileCommits?.[f.path] || []) : [];
+  const commitChips = touched.length && S.view.diff.commits.length
+    ? touched.map((n) => `<span class="cchip ${commitClass(n)}" title="${esc(n ? `${commitByN(n)?.sha.slice(0, 8)} ${commitByN(n)?.subject || ''}` : 'Not committed yet')}">${commitLabel(n)}</span>`).join('') : '';
   const head = `<div class="file-head">
-    <button class="caret" data-act="toggle-file" data-file="${esc(f.path)}" aria-label="Collapse">${collapsed ? '▸' : '▾'}</button>
-    <span class="file-name" title="${esc(f.path)}">${name}</span>${tag}${gen}
+    <button class="caret" data-act="toggle-file" data-file="${esc(f.uid)}" aria-label="Collapse">${collapsed ? '▸' : '▾'}</button>
+    <span class="file-name" title="${esc(f.path)}">${name}</span>${tag}${gen}${commitChips}
     <span class="stat-add">+${f.add}</span><span class="stat-del">−${f.del}</span>
     ${collapsed && nOpen ? `<span class="chip comments" title="Expand to see them">${nOpen} comment${nOpen === 1 ? '' : 's'}</span>` : ''}
     ${f.status !== 'deleted' && wt && editorLink(wt.path) ? `<a class="file-tag" href="${esc(editorLink(`${wt.path}/${f.path}`, firstLine))}" title="Open in ${editorName()}">open</a>` : ''}
-    <label class="viewed-box ${viewed ? 'on' : ''}"><input type="checkbox" data-act="viewed" data-file="${esc(f.path)}" ${viewed ? 'checked' : ''}> Viewed</label>
+    ${f.commit ? '' : `<label class="viewed-box ${viewed ? 'on' : ''}"><input type="checkbox" data-act="viewed" data-file="${esc(f.path)}" ${viewed ? 'checked' : ''}> Viewed</label>`}
   </div>`;
   if (collapsed) body = '';
   else if (f.binary) body = '<div class="file-note">Binary file</div>';
   else if (!f.hunks.length) body = `<div class="file-note">${f.status === 'renamed' ? 'Renamed without changes' : 'No content changes (mode change or empty file)'}</div>`;
-  else if (f.lineCount > 2500 && !S.forceRender.has(f.path)) body = `<div class="file-note">Large diff (${f.lineCount} lines). <button class="link-btn" data-act="force-render" data-file="${esc(f.path)}">Load it</button></div>`;
+  else if (f.lineCount > 2500 && !S.forceRender.has(f.uid)) body = `<div class="file-note">Large diff (${f.lineCount} lines). <button class="link-btn" data-act="force-render" data-file="${esc(f.uid)}">Load it</button></div>`;
   else {
     const rows = [];
     for (const h of f.hunks) {
@@ -315,9 +337,12 @@ function renderFile(f, byAnchor, used) {
       for (const l of h.lines) {
         const side = l.t === 'del' ? 'old' : 'new';
         const line = l.t === 'del' ? l.o : l.n;
-        const k = keyOf(f.path, side, line);
+        const k = keyOf(f.path, side, line, f.commit);
         const sign = l.t === 'add' ? '+' : l.t === 'del' ? '−' : ' ';
-        rows.push(`<tr class="line ${l.t}" data-k="${esc(k)}"><td class="num" data-act="new-comment" data-k="${esc(k)}">${l.o ?? ''}</td><td class="num" data-act="new-comment" data-k="${esc(k)}">${l.n ?? ''}</td><td class="code"><button class="add-c" data-act="new-comment" data-k="${esc(k)}" title="Comment on this line">+</button><span class="sign">${sign}</span>${hl(l.text, lang)}</td></tr>`);
+        const cn = !f.commit && l.t === 'add' ? commitOfLine(f.path, l.n) : undefined;
+        const cAttr = cn !== undefined ? ` data-c="${cn}"` : '';
+        const cBar = cn !== undefined ? `<span class="cbar ${commitClass(cn)}" title="${esc(cn ? `#${cn} ${commitByN(cn)?.sha.slice(0, 8)} ${commitByN(cn)?.subject || ''}` : 'Not committed yet')}"></span>` : '';
+        rows.push(`<tr class="line ${l.t}" data-k="${esc(k)}"${cAttr}><td class="num" data-act="new-comment" data-k="${esc(k)}">${l.o ?? ''}</td><td class="num" data-act="new-comment" data-k="${esc(k)}">${l.n ?? ''}</td><td class="code">${cBar}<button class="add-c" data-act="new-comment" data-k="${esc(k)}" title="Comment on this line">+</button><span class="sign">${sign}</span>${hl(l.text, lang)}</td></tr>`);
         const crHere = side === 'new' ? (S.view.crByAnchor?.get(k) || []) : [];
         const threads = (byAnchor.get(k) || []);
         threads.forEach((c) => used.add(c.id));
@@ -336,7 +361,7 @@ function renderFile(f, byAnchor, used) {
   ].sort((a, b) => (a.line || 0) - (b.line || 0));
   const out = outsideItems.length && !collapsed
     ? `<div class="outdated"><div class="outdated-label">Not on a changed line, so shown here</div><div class="threads">${outsideItems.map((i) => i.html).join('')}</div></div>` : '';
-  return `<section class="file ${collapsed ? 'collapsed' : ''}" id="f-${fnv(f.path)}">${head}<div class="file-body">${out}${body}</div></section>`;
+  return `<section class="file ${collapsed ? 'collapsed' : ''}" id="f-${fnv(f.uid)}">${head}<div class="file-body">${out}${body}</div></section>`;
 }
 
 // ---------- CodeRabbit ----------
@@ -440,28 +465,45 @@ function renderMain() {
   const v = S.view;
   const byAnchor = new Map();
   for (const c of v.comments) {
-    const k = keyOf(c.file, c.side, c.line);
+    const k = keyOf(c.file, c.side, c.line, c.commit);
     if (!byAnchor.has(k)) byAnchor.set(k, []);
     byAnchor.get(k).push(c);
   }
   const used = new Set();
-  const filesHtml = v.files.map((f) => renderFile(f, byAnchor, used)).join('');
-  const orphan = v.comments.filter((c) => !used.has(c.id) && c.status !== 'resolved' && !v.files.some((f) => f.path === c.file));
+  const mode = v.diff.mode;
+  const since = mode === 'since';
+  const byCommit = mode === 'commits';
+  let filesHtml;
+  if (byCommit) {
+    filesHtml = v.groups.map((g) => `<section class="commit-group" id="cg-${g.n}">
+      <div class="commit-head ${commitClass(g.n)}"><span class="cnum">${g.n ? `#${g.n}` : '±'}</span>
+        <span class="commit-title">${esc(g.subject)}</span>
+        <span class="muted small">${g.sha ? `<span class="mono">${g.sha.slice(0, 8)}</span> · ${esc(g.author)} · ${ago(g.time)} · ` : ''}${g.files.length} file${g.files.length === 1 ? '' : 's'}</span></div>
+      ${g.truncated ? '<div class="callout warn small">This commit is too large to show in full.</div>' : ''}
+      ${g.files.map((f) => renderFile(f, byAnchor, used)).join('') || '<div class="file-note">No file changes.</div>'}
+    </section>`).join('') + (v.diff.hiddenCommits ? `<div class="callout small">${v.diff.hiddenCommits} older commits aren't shown.</div>` : '');
+  } else {
+    filesHtml = v.files.map((f) => renderFile(f, byAnchor, used)).join('');
+  }
+  const unplaced = v.comments.filter((c) => !used.has(c.id) && c.status !== 'resolved');
+  // Comments that belong to this view but whose file isn't shown, vs comments made in the other view.
+  const orphan = unplaced.filter((c) => (byCommit ? !!c.commit : !c.commit));
+  const otherView = unplaced.filter((c) => (byCommit ? !c.commit : !!c.commit));
   const viewedCount = v.files.filter((f) => v.diff.viewed[f.path] === f.hash).length;
-  const since = v.diff.mode === 'since';
 
   v.headerSig = headerSig(wt);
   const scroll = main.scrollTop;
-  main.innerHTML = `<div class="page">
+  main.innerHTML = `<div class="page" ${S.hl !== null && S.hl !== undefined && !byCommit ? `data-hl="${S.hl}"` : ''}>
     ${headerHtml(wt)}
-    ${commitsHtml(v.diff.commits)}
+    ${commitsHtml(v.diff.commits, wt)}
     <div class="toolbar">
       <div class="actions">
         <div class="seg">
-          <button data-act="mode" data-mode="full" class="${since ? '' : 'on'}">All changes</button>
+          <button data-act="mode" data-mode="full" class="${since || byCommit ? '' : 'on'}">All changes</button>
+          <button data-act="mode" data-mode="commits" class="${byCommit ? 'on' : ''}" ${v.diff.commits.length || wt.dirty ? '' : 'disabled'} title="Each commit's changes in the order they were made">By commit</button>
           <button data-act="mode" data-mode="since" class="${since ? 'on' : ''}" ${v.diff.sinceAvailable ? '' : 'disabled title="Mark as reviewed first"'}>Since last review${v.diff.reviewedAt ? ` (${ago(v.diff.reviewedAt)})` : ''}</button>
         </div>
-        <span class="progress">${viewedCount} / ${v.files.length} files viewed</span>
+        ${byCommit ? `<span class="progress">${v.diff.commits.length} commit${v.diff.commits.length === 1 ? '' : 's'}, oldest first</span>` : `<span class="progress">${viewedCount} / ${v.files.length} files viewed</span>`}
       </div>
       <div class="actions">
         ${S.stale ? '<span class="banner">New changes landed. <button class="btn small" data-act="refresh">Refresh</button></span>' : ''}
@@ -473,10 +515,18 @@ function renderMain() {
     ${crPanelHtml(wt)}
     ${v.diff.truncated ? '<div class="callout warn">This diff is very large and was cut off.</div>' : ''}
     ${orphan.length ? `<div class="panel"><div class="panel-head">Comments on files not in this view</div><div class="panel-body threads">${orphan.map((c) => `<div class="mono">${esc(c.file)}:${c.line}</div>${threadHtml(c)}`).join('')}</div></div>` : ''}
-    ${v.files.length ? filesSummaryHtml(v) + filesHtml : `<div class="callout">${since ? 'Nothing has changed since your last review.' : `No changes against <code>${esc(v.diff.baseRef)}</code>.`}</div>`}
+    ${otherView.length ? `<details class="panel"><summary class="panel-head" style="cursor:pointer">${otherView.length} comment${otherView.length === 1 ? '' : 's'} made in the ${byCommit ? 'All changes' : 'By commit'} view
+        <button class="btn small" data-act="mode" data-mode="${byCommit ? 'full' : 'commits'}">Show there</button></summary>
+      <div class="panel-body threads">${otherView.map((c) => `<div class="mono">${esc(c.file)}:${c.line}${c.commit ? ` · ${c.commit.slice(0, 8)}` : ''}</div>${threadHtml(c)}`).join('')}</div></details>` : ''}
+    ${byCommit ? filesHtml : v.files.length ? filesSummaryHtml(v) + filesHtml : `<div class="callout">${since ? 'Nothing has changed since your last review.' : `No changes against <code>${esc(v.diff.baseRef)}</code>.`}</div>`}
   </div>
   ${reviewBarHtml(wt)}`;
   main.scrollTop = scroll;
+  applyHighlight();
+  if (S.scrollTo) {
+    document.getElementById(S.scrollTo)?.scrollIntoView({ block: 'start' });
+    S.scrollTo = null;
+  }
 
   if (S.focusEk) {
     const ta = main.querySelector(`textarea[data-ek="${CSS.escape(S.focusEk)}"]`);
@@ -514,10 +564,29 @@ function headerHtml(wt) {
     ${cleanup}`;
 }
 
-function commitsHtml(commits) {
-  if (!commits.length) return '';
-  return `<details class="panel" ${commits.length <= 6 ? 'open' : ''}><summary class="panel-head" style="cursor:pointer">${commits.length} commit${commits.length === 1 ? '' : 's'}</summary>
-    <div class="panel-body">${commits.map((c) => `<div class="commit"><span class="mono">${c.sha.slice(0, 8)}</span><span class="subject">${esc(c.subject)}</span><span class="when">${ago(c.time)}</span></div>`).join('')}</div></details>`;
+function commitsHtml(commits, wt) {
+  if (!commits.length && !wt.dirty) return '';
+  const byCommit = S.view?.diff.mode === 'commits';
+  const canHl = !byCommit && !!S.view?.blame;
+  const row = (n, sha, subject, time) => `<div class="commit ${S.hl === n && canHl ? 'hl' : ''}">
+      <button class="cswatch ${commitClass(n)}" data-act="hl-commit" data-n="${n}" ${canHl ? '' : 'disabled'} title="${canHl ? 'Highlight the lines from this commit' : byCommit ? '' : 'Working out which lines came from which commit…'}">${n ? `#${n}` : '±'}</button>
+      ${sha ? `<span class="mono">${sha.slice(0, 8)}</span>` : ''}<span class="subject">${esc(subject)}</span>
+      <span class="when">${time ? ago(time) : ''}</span>
+      <button class="link-btn" data-act="view-commit" data-n="${n}">view</button></div>`;
+  const rows = commits.map((c) => row(c.n, c.sha, c.subject, c.time));
+  if (wt.dirty) rows.push(row(0, null, `Uncommitted changes (${wt.dirty} file${wt.dirty === 1 ? '' : 's'})`, null));
+  return `<details class="panel commits-panel" ${commits.length <= 8 ? 'open' : ''}><summary class="panel-head" style="cursor:pointer">${commits.length} commit${commits.length === 1 ? '' : 's'}, oldest first
+      ${S.hl !== null && S.hl !== undefined && canHl ? '<button class="btn small" data-act="hl-commit" data-n="">Clear highlight</button>' : ''}</summary>
+    <div class="panel-body">${rows.join('')}</div></details>`;
+}
+
+function applyHighlight() {
+  let el = document.getElementById('hl-style');
+  if (!el) { el = document.createElement('style'); el.id = 'hl-style'; document.head.appendChild(el); }
+  const n = S.hl;
+  el.textContent = n === null || n === undefined ? '' : `
+    .page[data-hl="${n}"] tr.line.add:not([data-c="${n}"]) td, .page[data-hl="${n}"] tr.line.del td { opacity: .28; }
+    .page[data-hl="${n}"] tr.line.add[data-c="${n}"] td.code { box-shadow: inset 3px 0 0 var(--c-hl, currentColor); }`;
 }
 
 function filesSummaryHtml(v) {
@@ -770,7 +839,26 @@ async function loadView({ quiet = false } = {}) {
     ]);
     if (seq !== S.seq) return;
     S.mode = diff.mode;
-    S.view = { wtId: wt.id, diff, files: parseDiff(diff.diff), comments: cm.comments, reviews: cm.reviews, commentSig: wt.comments.sig, crSig: wt.coderabbit?.sig };
+    let files, groups = null;
+    if (diff.mode === 'commits') {
+      groups = diff.commits.map((c) => ({ ...c, files: parseDiff(c.diff).map((f) => ({ ...f, commit: c.sha, uid: `${c.sha}~${f.path}` })) }));
+      const unc = parseDiff(diff.uncommitted).map((f) => ({ ...f, commit: null, uncommitted: true, uid: `u~${f.path}` }));
+      if (unc.length) groups.push({ n: 0, sha: null, subject: 'Uncommitted changes', files: unc });
+      files = groups.flatMap((g) => g.files);
+    } else {
+      // Order files by the first commit that touched them; uncommitted-only files last.
+      const first = (p) => { const ns = (diff.fileCommits?.[p] || []).filter((n) => n > 0); return ns.length ? Math.min(...ns) : Infinity; };
+      files = parseDiff(diff.diff).map((f) => ({ ...f, commit: null, uid: f.path }))
+        .map((f, i) => ({ f, i, k: first(f.path) })).sort((a, b) => a.k - b.k || a.i - b.i).map((x) => x.f);
+    }
+    S.view = { wtId: wt.id, diff, files, groups, comments: cm.comments, reviews: cm.reviews, commentSig: wt.comments.sig, crSig: wt.coderabbit?.sig, blame: S.view?.wtId === wt.id && S.view.blame?.fingerprint === diff.fingerprint ? S.view.blame : null };
+    if (diff.mode !== 'commits' && !S.view.blame && diff.commits.length) {
+      api('GET', `/api/worktrees/${wt.id}/blame`).then((b) => {
+        if (seq !== S.seq || b.fingerprint !== S.view.diff.fingerprint) return;
+        S.view.blame = b;
+        renderMain();
+      }, () => {});
+    }
     await loadCodeRabbit();
     if (seq !== S.seq) return;
     S.stale = false;
@@ -797,6 +885,7 @@ function select(id) {
   S.toggled.clear();
   S.forceRender.clear();
   S.editors.clear();
+  S.hl = null;
   $('#main').scrollTop = 0;
   renderSidebar();
   renderMain();
@@ -916,8 +1005,8 @@ function connect() {
 // ---------- actions ----------
 
 function lineTextFor(key) {
-  const [file, side, line] = key.split('|');
-  const f = S.view.files.find((x) => x.path === file);
+  const { commit, file, side, line } = parseKey(key);
+  const f = S.view.files.find((x) => x.path === file && sameCommit(x.commit, commit));
   for (const h of f?.hunks || []) for (const l of h.lines) {
     if ((side === 'old' ? l.o : l.n) === Number(line) && (side === 'old') === (l.t === 'del')) return l.text;
   }
@@ -929,8 +1018,9 @@ async function saveEditor(ek) {
   if (!text) return;
   const [kind, rest] = [ek.slice(0, ek.indexOf(':')), ek.slice(ek.indexOf(':') + 1)];
   if (kind === 'new') {
-    const [file, side, line] = rest.split('|');
-    await api('POST', '/api/comments', { wtId: S.view.wtId, file, side, line: Number(line), lineText: lineTextFor(rest), body: text });
+    const { commit, file, side, line } = parseKey(rest);
+    const c = commit && S.view.diff.commits.find((x) => x.sha === commit);
+    await api('POST', '/api/comments', { wtId: S.view.wtId, file, side, line, lineText: lineTextFor(rest), body: text, commit: commit || undefined, commitSubject: c?.subject });
   } else if (kind === 'edit') {
     await api('PATCH', `/api/comments/${rest}`, { body: text });
   } else if (kind === 'reply') {
@@ -960,27 +1050,42 @@ const actions = {
   resolve: async (el) => { await api('POST', `/api/comments/${el.dataset.id}/resolve`, { author: 'you' }); await reloadComments(); },
   reopen: async (el) => { await api('POST', `/api/comments/${el.dataset.id}/reopen`); await reloadComments(); },
   'toggle-file': (el) => {
-    const f = S.view.files.find((x) => x.path === el.dataset.file);
-    S.toggled.set(f.path, !isCollapsed(f));
+    const f = S.view.files.find((x) => x.uid === el.dataset.file);
+    S.toggled.set(f.uid, !isCollapsed(f));
     renderMain();
   },
-  'collapse-all': () => { for (const f of S.view.files) S.toggled.set(f.path, true); renderMain(); },
+  'collapse-all': () => { for (const f of S.view.files) S.toggled.set(f.uid, true); renderMain(); },
+  'hl-commit': (el, e) => {
+    e.preventDefault();
+    const n = el.dataset.n === '' ? null : Number(el.dataset.n);
+    S.hl = S.hl === n ? null : n;
+    if (S.hl !== null) for (const f of S.view.files) if ((S.view.diff.fileCommits?.[f.path] || []).includes(S.hl)) S.toggled.set(f.uid, false);
+    renderMain();
+  },
+  'view-commit': (el, e) => {
+    e.preventDefault();
+    S.scrollTo = `cg-${el.dataset.n}`;
+    if (S.view.diff.mode === 'commits') { renderMain(); return; }
+    S.mode = 'commits';
+    S.hl = null;
+    loadView();
+  },
   'force-render': (el) => { S.forceRender.add(el.dataset.file); renderMain(); },
   viewed: async (el) => {
     const f = S.view.files.find((x) => x.path === el.dataset.file);
     const on = el.checked;
     await api('POST', `/api/worktrees/${S.view.wtId}/viewed`, { file: f.path, hash: f.hash, viewed: on });
     if (on) S.view.diff.viewed[f.path] = f.hash; else delete S.view.diff.viewed[f.path];
-    S.toggled.delete(f.path);
+    S.toggled.delete(f.uid);
     renderMain();
   },
   jump: (el, e) => {
     e.preventDefault();
-    const f = S.view.files.find((x) => x.path === el.dataset.file);
-    if (isCollapsed(f)) { S.toggled.set(f.path, false); renderMain(); }
-    document.getElementById(`f-${fnv(f.path)}`)?.scrollIntoView({ block: 'start' });
+    const f = S.view.files.find((x) => x.path === el.dataset.file && !x.commit);
+    if (isCollapsed(f)) { S.toggled.set(f.uid, false); renderMain(); }
+    document.getElementById(`f-${fnv(f.uid)}`)?.scrollIntoView({ block: 'start' });
   },
-  mode: (el) => { S.mode = el.dataset.mode; loadView(); },
+  mode: (el, e) => { e.preventDefault(); S.mode = el.dataset.mode; S.hl = null; loadView(); },
   refresh: () => loadView(),
   'mark-reviewed': async () => {
     await api('POST', `/api/worktrees/${S.view.wtId}/reviewed`, { tree: S.view.diff.tree, fingerprint: S.view.diff.fingerprint });
@@ -1039,9 +1144,9 @@ const actions = {
   },
   'cr-jump': (el, e) => {
     e.preventDefault();
-    const f = S.view.files.find((x) => x.path === el.dataset.file);
+    const f = S.view.files.find((x) => x.path === el.dataset.file && !x.commit);
     if (!f) { toast('That file isn\'t in this diff view'); return; }
-    if (isCollapsed(f)) { S.toggled.set(f.path, false); renderMain(); }
+    if (isCollapsed(f)) { S.toggled.set(f.uid, false); renderMain(); }
     const row = document.querySelector(`tr.line[data-k="${CSS.escape(keyOf(f.path, 'new', el.dataset.line))}"]`);
     (row || document.getElementById(`f-${fnv(f.path)}`))?.scrollIntoView({ block: 'center' });
   },
