@@ -1129,6 +1129,8 @@ function maybeNotify(st) {
 }
 
 function onState(st) {
+  // The server was upgraded: this page's code is now out of date too.
+  if (S.st && st.version !== S.st.version) { location.reload(); return; }
   const first = !S.st;
   maybeNotify(st);
   S.st = st;
