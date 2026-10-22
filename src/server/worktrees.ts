@@ -160,7 +160,10 @@ export function refreshWorktree(wt: WorktreeRecord, { force = false } = {}): Pro
     wt.untracked = untracked;
     wt.lastActivity = Math.max(wt.commitTime || 0, maxMtime);
     const base = resolveBase(wt);
-    const fp = sha1([head, base.ref, status, ...stamps].join('|'));
+    // The base's commit is part of the state too: pushing, pulling or fetching moves it (e.g. origin/main
+    // catching up with a pushed branch) without changing anything in the worktree itself.
+    const baseSha = (await git(wt.path, ['rev-parse', '--verify', '--quiet', `${base.ref}^{commit}`]).catch(() => '')).trim();
+    const fp = sha1([head, base.ref, baseSha, status, ...stamps].join('|'));
     if (fp !== wt.fingerprint || force) {
       wt.fingerprint = fp;
       wt.baseRef = base.ref;
