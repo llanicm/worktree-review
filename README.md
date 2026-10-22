@@ -16,6 +16,12 @@ lands, before anything becomes a PR.
   review to the session working in that worktree, when it finishes its current turn or
   with your next message to it. Claude resolves each comment with a note or replies.
   Replying sends the thread back. *Copy as prompt* is there if you'd rather paste it yourself.
+- **Ask CodeRabbit too (optional).** With the [CodeRabbit CLI](https://docs.coderabbit.ai/cli/overview)
+  signed in, *Run CodeRabbit* reviews the worktree against the same base. Findings appear inline,
+  or at the top of the file when they're on an unchanged line. *Send to Claude* turns a finding into
+  one of your draft comments, and *Dismiss* hides it. Reviews take a few minutes and count against
+  your CodeRabbit plan's hourly limit, which the panel shows. Reviews of a company repo use your
+  company's CodeRabbit plan if you have a seat.
 - **Merged worktrees clean themselves up.** Once a branch's PR merges, the worktree is
   removed, and its branch too if it matches the PR. This only happens if the worktree
   has no uncommitted changes, no live session is using it, its HEAD is in the merged PR
@@ -37,7 +43,8 @@ In Claude Code:
 ```
 
 Start a new session. The server starts in the background. Then run
-`/worktree-review:open` or go to http://localhost:4747.
+`/worktree-review:open` or go to http://localhost:4747. The first visit walks you through setup:
+what was found, GitHub, CodeRabbit and preferences. You can rerun it from Settings.
 
 Update with `/plugin marketplace update worktree-review`, then `/plugin update worktree-review`.
 The next session that starts replaces the running server with the new version.
@@ -51,9 +58,11 @@ been inside it, or it has mentioned the path repeatedly.
 
 ## Settings
 
-`~/.claude/worktree-review/config.json` is created on first run. Restart the server after
-editing it: `curl -X POST -H 'x-wtr: 1' localhost:4747/api/shutdown`, then start a new
-session or run `/worktree-review:open`.
+Use **Settings**, the gear in the sidebar. It covers folders to scan (with a folder picker),
+GitHub and CodeRabbit status, signing in to and out of CodeRabbit, auto-cleanup, the editor and
+timings. Everything is saved to `~/.claude/worktree-review/config.json`. If you edit that file by
+hand, restart the server afterwards: `curl -X POST -H 'x-wtr: 1' localhost:4747/api/shutdown`,
+then start a new session or run `/worktree-review:open`.
 
 | Key | Default | |
 |---|---|---|
@@ -83,6 +92,7 @@ removes it.
 ## Files
 
 - `server/server.mjs`: the server. Node, no dependencies; it shells out to `git` and `gh`.
-- `server/public/`: the page.
+- `server/public/`: the page. `sse-worker.js` shares one live connection across tabs, because
+  browsers cap connections per host.
 - `scripts/hook.mjs`: hands submitted reviews to the right session (`UserPromptSubmit` and `Stop` hooks).
 - `scripts/ensure-server.mjs`: starts or upgrades the server (`SessionStart` hook and `/worktree-review:open`).

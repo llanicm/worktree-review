@@ -69,6 +69,9 @@ const S = {
   stale: false,
   summaries: {},     // wtId -> review summary draft
   prevStatus: new Map(),
+  page: null,        // 'settings' | 'welcome' | null
+  integ: null,       // integrations status from the server
+  setupSig: null,
 };
 
 // ---------- sidebar ----------
@@ -115,6 +118,8 @@ function wtItem(wt, showNew) {
       ${wt.sessions.map(sessionChip).join('')}${prChip(wt.pr)}
       ${nComments ? `<span class="chip comments">${nComments} comment${nComments === 1 ? '' : 's'}</span>` : ''}
       ${wt.dirty ? `<span class="chip" title="Uncommitted changes">${wt.dirty} uncommitted</span>` : ''}
+      ${wt.coderabbit?.status === 'running' ? '<span class="chip cr"><span class="dot busy"></span>CodeRabbit</span>'
+        : wt.coderabbit?.open ? `<span class="chip cr">${wt.coderabbit.open} finding${wt.coderabbit.open === 1 ? '' : 's'}</span>` : ''}
     </div>
   </a>`;
 }
@@ -281,17 +286,24 @@ function renderFile(f, byAnchor, used) {
   const tag = f.status !== 'modified' ? `<span class="file-tag">${f.status}</span>` : '';
   const gen = f.generated ? '<span class="file-tag">generated</span>' : '';
   const firstLine = f.hunks[0]?.lines.find((l) => l.n)?.n || 1;
+
+  let body;
+  const lang = langFor(f.path);
+  // Lines this diff actually shows; anything anchored elsewhere goes in the "not on a changed line" block.
+  const shown = new Set();
+  for (const h of f.hunks) for (const l of h.lines) shown.add(l.t === 'del' ? keyOf(f.path, 'old', l.o) : keyOf(f.path, 'new', l.n));
+  const outsideComments = (S.view.comments || []).filter((c) => c.file === f.path && c.status !== 'resolved' && !shown.has(keyOf(c.file, c.side, c.line)));
+  const fileFindings = (S.view.cr?.findings || []).filter((x) => x.file === f.path && x.status === 'open');
+  const outsideFindings = fileFindings.filter((x) => !shown.has(keyOf(x.file, 'new', x.endLine || x.startLine)));
+  const nOpen = (S.view.comments || []).filter((c) => c.file === f.path && c.status !== 'resolved').length + fileFindings.length;
   const head = `<div class="file-head">
     <button class="caret" data-act="toggle-file" data-file="${esc(f.path)}" aria-label="Collapse">${collapsed ? '▸' : '▾'}</button>
     <span class="file-name" title="${esc(f.path)}">${name}</span>${tag}${gen}
     <span class="stat-add">+${f.add}</span><span class="stat-del">−${f.del}</span>
+    ${collapsed && nOpen ? `<span class="chip comments" title="Expand to see them">${nOpen} comment${nOpen === 1 ? '' : 's'}</span>` : ''}
     ${f.status !== 'deleted' && wt && editorLink(wt.path) ? `<a class="file-tag" href="${esc(editorLink(`${wt.path}/${f.path}`, firstLine))}" title="Open in ${editorName()}">open</a>` : ''}
     <label class="viewed-box ${viewed ? 'on' : ''}"><input type="checkbox" data-act="viewed" data-file="${esc(f.path)}" ${viewed ? 'checked' : ''}> Viewed</label>
   </div>`;
-
-  let body;
-  const lang = langFor(f.path);
-  const outdated = (S.view.comments || []).filter((c) => c.file === f.path && !used.has(c.id) && !byAnchor.has(keyOf(c.file, c.side, c.line)) && c.status !== 'resolved');
   if (collapsed) body = '';
   else if (f.binary) body = '<div class="file-note">Binary file</div>';
   else if (!f.hunks.length) body = `<div class="file-note">${f.status === 'renamed' ? 'Renamed without changes' : 'No content changes (mode change or empty file)'}</div>`;
@@ -306,23 +318,117 @@ function renderFile(f, byAnchor, used) {
         const k = keyOf(f.path, side, line);
         const sign = l.t === 'add' ? '+' : l.t === 'del' ? '−' : ' ';
         rows.push(`<tr class="line ${l.t}" data-k="${esc(k)}"><td class="num" data-act="new-comment" data-k="${esc(k)}">${l.o ?? ''}</td><td class="num" data-act="new-comment" data-k="${esc(k)}">${l.n ?? ''}</td><td class="code"><button class="add-c" data-act="new-comment" data-k="${esc(k)}" title="Comment on this line">+</button><span class="sign">${sign}</span>${hl(l.text, lang)}</td></tr>`);
+        const crHere = side === 'new' ? (S.view.crByAnchor?.get(k) || []) : [];
         const threads = (byAnchor.get(k) || []);
         threads.forEach((c) => used.add(c.id));
         const ek = `new:${k}`;
-        if (threads.length || S.editors.has(ek)) {
-          rows.push(`<tr class="thread-row"><td colspan="3"><div class="threads">${threads.map(threadHtml).join('')}${S.editors.has(ek) ? editorHtml(ek, 'Add comment') : ''}</div></td></tr>`);
+        if (threads.length || crHere.length || S.editors.has(ek)) {
+          rows.push(`<tr class="thread-row"><td colspan="3"><div class="threads">${crHere.map((f) => findingHtml(f, true)).join('')}${threads.map(threadHtml).join('')}${S.editors.has(ek) ? editorHtml(ek, 'Add comment') : ''}</div></td></tr>`);
         }
       }
     }
     body = `<table class="diff"><colgroup><col class="num"><col class="num"><col></colgroup>${rows.join('')}</table>`;
   }
-  const out = outdated.length && !collapsed
-    ? `<div class="outdated"><div class="outdated-label">Comments on lines that are no longer in this diff</div><div class="threads">${outdated.map((c) => { used.add(c.id); return `<div class="mono">line ${c.line}: ${esc(c.lineText || '')}</div>${threadHtml(c)}`; }).join('')}</div></div>` : '';
+  const snippet = (line, text) => `<div class="outside-line"><span class="outside-no">${line ?? ''}</span><code>${text ? hl(text, lang) : '<span class="muted">(line not available)</span>'}</code></div>`;
+  const outsideItems = [
+    ...outsideFindings.map((x) => ({ line: x.startLine, html: snippet(x.startLine, x.snippet) + findingHtml(x, true) })),
+    ...outsideComments.map((c) => { used.add(c.id); return { line: c.line, html: snippet(c.line, c.lineText) + threadHtml(c) }; }),
+  ].sort((a, b) => (a.line || 0) - (b.line || 0));
+  const out = outsideItems.length && !collapsed
+    ? `<div class="outdated"><div class="outdated-label">Not on a changed line, so shown here</div><div class="threads">${outsideItems.map((i) => i.html).join('')}</div></div>` : '';
   return `<section class="file ${collapsed ? 'collapsed' : ''}" id="f-${fnv(f.path)}">${head}<div class="file-body">${out}${body}</div></section>`;
 }
 
+// ---------- CodeRabbit ----------
+
+const SEV_ORDER = ['critical', 'major', 'minor', 'trivial', 'info', 'none'];
+const elapsed = (ms) => { const s = Math.max(0, Math.floor((Date.now() - ms) / 1000)); return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`; };
+
+function crButtonHtml(wt) {
+  if (!S.st.coderabbitReady) return '<a class="btn" href="#/settings" title="Connect CodeRabbit in Settings">Set up CodeRabbit</a>';
+  if (wt.coderabbit?.status === 'running') {
+    return `<span class="cr-running"><span class="dot busy"></span>CodeRabbit reviewing <span class="cr-elapsed" data-start="${wt.coderabbit.startedAt}">${elapsed(wt.coderabbit.startedAt)}</span></span>
+      <button class="btn small" data-act="cr-cancel">Cancel</button>`;
+  }
+  return `<button class="btn cr-btn" data-act="cr-run" title="Ask CodeRabbit to review these changes (uses one of your hourly CodeRabbit reviews)">Run CodeRabbit</button>`;
+}
+
+function findingHtml(f, inline = false) {
+  const loc = f.file ? `${f.file}${f.startLine ? `:${f.startLine}${f.endLine && f.endLine !== f.startLine ? `–${f.endLine}` : ''}` : ''}` : '';
+  const acts = f.status === 'open'
+    ? `<button class="btn small primary" data-act="cr-send" data-id="${f.id}">Send to Claude</button><button class="btn small" data-act="cr-dismiss" data-id="${f.id}">Dismiss</button>`
+    : f.status === 'sent' ? '<span class="muted small">Added to your review as a draft</span>'
+    : `<span class="muted small">Dismissed</span><button class="link-btn" data-act="cr-restore" data-id="${f.id}">undo</button>`;
+  const detail = [f.comment && f.comment !== f.title ? `<div class="msg-body">${md(f.comment)}</div>` : '',
+    f.suggestions ? `<details><summary>Suggested change</summary><pre class="suggestion">${esc(f.suggestions)}</pre></details>` : '',
+    f.codegen && f.codegen !== f.comment ? `<details><summary>Fix guidance for agents</summary><div class="msg-body">${md(f.codegen)}</div></details>` : ''].join('');
+  return `<div class="thread cr-finding ${f.status}">
+    <div class="msg"><div class="msg-head"><strong class="cr-name">CodeRabbit</strong><span class="sev ${esc(f.severity)}">${esc(f.severity)}</span>
+      ${!inline && loc ? `<a href="#" class="mono" data-act="cr-jump" data-file="${esc(f.file)}" data-line="${f.endLine || f.startLine || ''}">${esc(loc)}</a>` : ''}</div>
+      ${f.title ? `<div class="cr-title">${md(f.title)}</div>` : ''}
+      ${f.status === 'open' || !inline ? detail : ''}</div>
+    <div class="thread-actions">${acts}</div></div>`;
+}
+
+function crPanelHtml(wt) {
+  const r = S.view?.cr;
+  if (!r) return '';
+  const findings = [...r.findings].sort((a, b) => SEV_ORDER.indexOf(a.severity) - SEV_ORDER.indexOf(b.severity));
+  const open = findings.filter((f) => f.status === 'open');
+  const stale = r.status !== 'running' && r.fingerprint && r.fingerprint !== wt.fingerprint;
+  let head, body = '';
+  if (r.status === 'running') {
+    head = `CodeRabbit is reviewing against <code>${esc(r.baseRef)}</code>`;
+    body = `<p class="muted">Reviews usually take 2–6 minutes and can take 15 or more. You can leave this page; findings appear here and inline as they arrive.</p>`;
+  } else if (r.status === 'done') {
+    head = `CodeRabbit · ${findings.length ? `${open.length} open of ${findings.length} finding${findings.length === 1 ? '' : 's'}` : 'no findings'}`;
+    if (!findings.length) body = `<p class="muted">Reviewed ${r.reviewedFiles.length} file${r.reviewedFiles.length === 1 ? '' : 's'} and found nothing to flag.</p>`;
+  } else {
+    head = `CodeRabbit review ${r.status === 'cancelled' ? 'cancelled' : 'failed'}`;
+    body = `<p class="error">${esc(r.error || 'Something went wrong.')}</p>`;
+  }
+  const meta = `<span class="muted small">${r.status === 'running' ? `started ${ago(r.startedAt)}` : `${ago(r.finishedAt || r.startedAt)}`}${r.usage ? ` · ${r.usage.remaining} of ${r.usage.limit} reviews left this hour` : ''}</span>`;
+  return `<div class="panel cr-panel">
+    <div class="panel-head"><span>${head}</span><span class="actions">${meta}${open.length > 1 ? '<button class="btn small" data-act="cr-send-all">Send all to Claude</button>' : ''}</span></div>
+    <div class="panel-body">
+      ${stale ? '<div class="callout warn small">The code has changed since this review. Line numbers may be off; run CodeRabbit again for a fresh look.</div>' : ''}
+      ${body}
+      <div class="threads cr-list">${findings.map((f) => findingHtml(f)).join('')}</div>
+    </div></div>`;
+}
+
+function indexFindings() {
+  const v = S.view;
+  v.crByAnchor = new Map();
+  for (const f of v.cr?.findings || []) {
+    if (f.status !== 'open' || !f.file) continue;
+    const k = keyOf(f.file, 'new', f.endLine || f.startLine);
+    if (!v.crByAnchor.has(k)) v.crByAnchor.set(k, []);
+    v.crByAnchor.get(k).push(f);
+  }
+}
+
+async function loadCodeRabbit() {
+  if (!S.view) return;
+  try {
+    const { review } = await api('GET', `/api/worktrees/${S.view.wtId}/coderabbit`);
+    S.view.cr = review;
+    indexFindings();
+  } catch {}
+}
+
+setInterval(() => {
+  for (const el of document.querySelectorAll('.cr-elapsed')) el.textContent = elapsed(Number(el.dataset.start));
+}, 1000);
+
 function renderMain() {
   const main = $('#main');
+  if (S.page) {
+    const scroll = main.scrollTop;
+    main.innerHTML = setupHtml(S.page);
+    main.scrollTop = scroll;
+    return;
+  }
   if (!S.selId) { main.innerHTML = '<div class="empty">Pick a worktree on the left.</div>'; return; }
   const wt = curWt();
   if (!wt) {
@@ -359,10 +465,12 @@ function renderMain() {
       </div>
       <div class="actions">
         ${S.stale ? '<span class="banner">New changes landed. <button class="btn small" data-act="refresh">Refresh</button></span>' : ''}
+        ${crButtonHtml(wt)}
         <button class="btn" data-act="collapse-all">Collapse all</button>
         <button class="btn" data-act="mark-reviewed" title="Remember this exact state so you can see only what changes next">Mark as reviewed</button>
       </div>
     </div>
+    ${crPanelHtml(wt)}
     ${v.diff.truncated ? '<div class="callout warn">This diff is very large and was cut off.</div>' : ''}
     ${orphan.length ? `<div class="panel"><div class="panel-head">Comments on files not in this view</div><div class="panel-body threads">${orphan.map((c) => `<div class="mono">${esc(c.file)}:${c.line}</div>${threadHtml(c)}`).join('')}</div></div>` : ''}
     ${v.files.length ? filesSummaryHtml(v) + filesHtml : `<div class="callout">${since ? 'Nothing has changed since your last review.' : `No changes against <code>${esc(v.diff.baseRef)}</code>.`}</div>`}
@@ -454,6 +562,200 @@ function reviewBarHtml(wt) {
   </details>`;
 }
 
+// ---------- settings & onboarding ----------
+
+const ICON_OK = '<span class="check ok" aria-label="Done">✓</span>';
+const ICON_TODO = '<span class="check todo" aria-label="Needs attention">!</span>';
+const ICON_OPT = '<span class="check opt" aria-label="Optional">–</span>';
+const ICON_WAIT = '<span class="check wait" aria-label="Checking">…</span>';
+
+async function loadIntegrations(refresh = false) {
+  try {
+    S.integ = await api('GET', `/api/integrations${refresh ? '?refresh=1' : ''}`);
+  } catch (e) { toast(e.message, true); }
+  if (S.page) renderMain();
+}
+
+function stepHtml(icon, title, body, extra = '') {
+  return `<section class="step"><div class="step-icon">${icon}</div><div class="step-main"><h2>${title}</h2>${body}${extra}</div></section>`;
+}
+
+const cmd = (c) => `<code class="cmd">${esc(c)}</code><button class="link-btn" data-act="copy-text" data-text="${esc(c)}">copy</button>`;
+
+function foldersHtml() {
+  const c = S.st.config;
+  const row = (key, p) => `<div class="folder-row"><code title="${esc(expandHome(p))}">${esc(tilde(expandHome(p)))}</code><button class="link-btn" data-act="remove-folder" data-key="${key}" data-path="${esc(p)}">remove</button></div>`;
+  return `<div class="folders">
+    ${c.roots.map((p) => row('roots', p)).join('')}${c.extraRepos.map((p) => row('extraRepos', p)).join('')}
+    <div class="folder-add">
+      <button class="btn small" data-act="open-picker">Choose a folder…</button>
+      <span class="muted small">A repo, or a folder of repos.</span>
+    </div>
+  </div>`;
+}
+
+function setupHtml(mode) {
+  const st = S.st;
+  const I = S.integ;
+  const c = st.config;
+  const welcome = mode === 'welcome';
+  const steps = [];
+
+  // 1. Worktrees
+  const nRepos = st.repos.length;
+  steps.push(stepHtml(st.worktrees.length ? ICON_OK : ICON_TODO, 'Your worktrees',
+    `<p>${st.worktrees.length
+      ? `Found <strong>${st.worktrees.length} worktree${st.worktrees.length === 1 ? '' : 's'}</strong> in ${nRepos} repo${nRepos === 1 ? '' : 's'}, from the folders your Claude Code sessions have worked in over the last 30 days.`
+      : 'No worktrees yet. Repos appear here once a Claude Code session has worked in them, or add a folder below.'}</p>
+     ${nRepos ? `<div class="repo-list">${st.repos.map((r) => `<div><strong>${esc(r.name)}</strong> <code>${esc(tilde(r.root))}</code>${r.github ? ` <span class="muted">${esc(r.github)}</span>` : ''}</div>`).join('')}</div>` : ''}
+     <details ${welcome && st.worktrees.length ? '' : 'open'}><summary>Also scan these folders</summary>${foldersHtml()}</details>`));
+
+  // 2. Claude Code
+  const hookAgo = I?.claude.lastHookAt ? ago(I.claude.lastHookAt) : null;
+  steps.push(stepHtml(!I ? ICON_WAIT : (st.sessions.length || hookAgo) ? ICON_OK : ICON_TODO, 'Claude Code',
+    `<p>${st.sessions.length} live session${st.sessions.length === 1 ? '' : 's'}.
+      Reviews you send are handed to the session working in that worktree when it finishes its current turn, or with your next message to it.</p>
+     <p class="muted">${hookAgo ? `Last heard from a session's hook ${hookAgo}.` : "Haven't heard from a session's hook yet. That happens the next time you send a message in a session started after installing the plugin."}</p>`));
+
+  // 3. GitHub
+  let ghBody;
+  if (!I) ghBody = '<p class="muted">Checking…</p>';
+  else if (!I.gh.installed) ghBody = `<p>Install the GitHub CLI to see PR status and clean up merged worktrees: ${cmd('brew install gh')} then ${cmd('gh auth login')}</p>`;
+  else if (!I.gh.authed) ghBody = `<p>The GitHub CLI isn't signed in. Run ${cmd('gh auth login')} in a terminal, then check again.</p>`;
+  else ghBody = `<p>Signed in as <strong>${esc(I.gh.account || 'unknown')}</strong>. PR status and merged-worktree cleanup are available.</p>`;
+  steps.push(stepHtml(!I ? ICON_WAIT : I.gh.authed ? ICON_OK : ICON_TODO, 'GitHub',
+    ghBody + `<label class="setting"><input type="checkbox" data-cfg="autoCleanup" ${c.autoCleanup ? 'checked' : ''}>
+      <span><strong>Remove worktrees when their PR merges</strong><br><span class="muted">Only when the worktree is clean, no Claude session is using it, its HEAD is in the merged PR and it has no unsent comments. PRs merged before you installed this are left for you to remove.</span></span></label>`));
+
+  // 4. CodeRabbit
+  const login = st.coderabbitLogin;
+  let crBody, crIcon = ICON_OPT;
+  if (!I) { crBody = '<p class="muted">Checking…</p>'; crIcon = ICON_WAIT; }
+  else if (!I.coderabbit.installed) {
+    crBody = `<p>Optional. With the CodeRabbit CLI you can ask CodeRabbit to review a worktree before it's a PR, and send its findings to Claude.</p>
+      <p>Install it with ${cmd('brew install coderabbit')} or ${cmd('curl -fsSL https://cli.coderabbit.ai/install.sh | sh')}, then <button class="link-btn" data-act="recheck">check again</button>.</p>`;
+  } else if (!I.coderabbit.authed) {
+    crBody = `<p>CodeRabbit CLI ${esc(I.coderabbit.version || '')} is installed. Sign in to use it here. If your company has CodeRabbit on GitHub, reviews of its repos use the company plan.</p>
+      ${login?.running
+        ? `<p><strong>Finish signing in in the browser window that opened.</strong> ${login.url ? `<a href="${esc(login.url)}" target="_blank">Open the sign-in page</a> if it didn't.` : ''}</p>`
+        : `<div class="actions"><button class="btn primary" data-act="cr-login">Sign in to CodeRabbit</button></div>`}
+      ${login?.error ? `<p class="error">${esc(login.error)}</p>` : ''}`;
+  } else {
+    crIcon = ICON_OK;
+    const cr = I.coderabbit;
+    crBody = `<table class="kv">
+        <tr><td>Account</td><td><strong>${esc(cr.user)}</strong>${cr.email ? ` <span class="muted">${esc(cr.email)}</span>` : ''}</td></tr>
+        <tr><td>Organization</td><td>${esc(cr.org || '—')}${cr.orgs?.length > 1 ? ` <span class="muted">(also: ${cr.orgs.filter((o) => o !== cr.org).map(esc).join(', ')})</span>` : ''}</td></tr>
+        ${cr.plan ? `<tr><td>Plan</td><td>${esc(cr.plan)}${cr.seat ? ` · seat ${esc(cr.seat)}` : ''}</td></tr>` : ''}
+        <tr><td>CLI</td><td>${esc(cr.version || '')}</td></tr>
+      </table>
+      <p class="muted">Reviews count against the organization that owns each repo. To change your default organization, run ${cmd('coderabbit auth org')} in a terminal.</p>
+      ${welcome ? '' : '<div class="actions"><button class="btn small" data-act="cr-logout">Sign out</button></div>'}`;
+  }
+  steps.push(stepHtml(crIcon, 'CodeRabbit <span class="muted small">optional</span>', crBody));
+
+  // 5. Preferences
+  const notif = !('Notification' in window) ? 'unsupported' : Notification.permission;
+  steps.push(stepHtml(ICON_OK, 'Preferences', `
+    <label class="setting row"><span>Open files in</span>
+      <select data-cfg="editor">${[['vscode', 'VS Code'], ['cursor', 'Cursor'], ['windsurf', 'Windsurf'], ['zed', 'Zed'], ['none', 'No editor links']].map(([v, l]) => `<option value="${v}" ${c.editor === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+    <div class="setting row"><span>Desktop notifications when a session finishes work you haven't reviewed</span>
+      ${notif === 'granted' ? '<span class="muted">On</span>' : notif === 'denied' ? '<span class="muted">Blocked in browser settings</span>' : notif === 'unsupported' ? '<span class="muted">Not supported here</span>' : '<button class="btn small" data-act="enable-notifications">Turn on</button>'}</div>
+    ${welcome ? '' : `
+    <label class="setting row"><span>Count a worktree as recent for</span><span><input type="number" min="1" max="90" data-cfg="recentDays" value="${c.recentDays}"> days</span></label>
+    <label class="setting row"><span>Check PR status every</span><span><input type="number" min="1" max="60" data-cfg="prPollMinutes" value="${c.prPollMinutes}"> minutes</span></label>`}`));
+
+  if (!welcome) {
+    steps.push(stepHtml(ICON_OK, 'About', `<table class="kv">
+      <tr><td>Version</td><td>${esc(st.version)}</td></tr>
+      <tr><td>Data</td><td><code>${esc(tilde(I?.dataDir || ''))}</code></td></tr>
+      <tr><td>Node</td><td>${esc(I?.node || '')}</td></tr></table>
+      <div class="actions"><button class="btn small" data-act="rerun-setup">Run setup again</button></div>`));
+  }
+
+  return `<div class="page setup">
+    <div class="title-row"><h1>${welcome ? 'Welcome to Worktree Review' : 'Settings'}</h1>
+      <button class="btn small" data-act="recheck">Check again</button></div>
+    <p class="lede">${welcome
+      ? 'Review what Claude is doing in your git worktrees the way you\'d review a PR, then send comments straight back to the session. A quick check of what\'s connected:'
+      : 'Integrations and preferences. Changes save as you make them.'}</p>
+    ${steps.join('')}
+    ${welcome ? '<div class="actions finish"><button class="btn primary" data-act="finish-setup">Start reviewing</button></div>' : ''}
+  </div>`;
+}
+
+function setupSig(st) {
+  return JSON.stringify([st.coderabbitLogin, st.config, st.repos, st.sessions.length, st.worktrees.length, st.onboardedAt]);
+}
+
+async function saveConfig(patch) {
+  try {
+    await api('POST', '/api/config', patch);
+    toast('Saved');
+  } catch (e) { toast(e.message, true); }
+}
+
+// ---------- folder picker ----------
+
+const expandHome = (p) => (p.startsWith('~') && S.st?.home ? S.st.home + p.slice(1) : p);
+const FOLDER_ICON = '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M1.75 1A1.75 1.75 0 0 0 0 2.75v10.5C0 14.216.784 15 1.75 15h12.5A1.75 1.75 0 0 0 16 13.25v-8.5A1.75 1.75 0 0 0 14.25 3H7.5a.25.25 0 0 1-.2-.1l-.9-1.2C6.07 1.26 5.55 1 5 1H1.75Z"/></svg>';
+const REPO_ICON = '<svg viewBox="0 0 16 16" width="16" height="16" aria-hidden="true"><path fill="currentColor" d="M2 2.5A2.5 2.5 0 0 1 4.5 0h8.75a.75.75 0 0 1 .75.75v12.5a.75.75 0 0 1-.75.75h-2.5a.75.75 0 0 1 0-1.5h1.75v-2h-8a1 1 0 0 0-.714 1.7.75.75 0 1 1-1.072 1.05A2.495 2.495 0 0 1 2 11.5Zm10.5-1h-8a1 1 0 0 0-1 1v6.708A2.486 2.486 0 0 1 4.5 9h8ZM5 12.25a.25.25 0 0 1 .25-.25h3.5a.25.25 0 0 1 .25.25v3.25a.25.25 0 0 1-.4.2l-1.45-1.087a.249.249 0 0 0-.3 0L5.4 15.7a.25.25 0 0 1-.4-.2Z"/></svg>';
+
+async function openPicker(p) {
+  S.picker ||= { hidden: false };
+  try {
+    S.picker.data = await api('GET', `/api/fs?path=${encodeURIComponent(p)}${S.picker.hidden ? '&hidden=1' : ''}`);
+  } catch (e) { toast(e.message, true); if (S.picker.data) return; S.picker.data = null; return; }
+  renderPicker();
+}
+
+function closePicker() {
+  $('#picker')?.remove();
+}
+
+function renderPicker() {
+  const d = S.picker.data;
+  const home = S.st.home;
+  const parts = d.display.split('/').filter(Boolean);
+  const crumbs = parts.map((name, i) => {
+    const target = i === 0 ? home : `${home}/${parts.slice(1, i + 1).join('/')}`;
+    return i === parts.length - 1 ? `<strong>${esc(name)}</strong>` : `<button class="link-btn" data-act="picker-go" data-path="${esc(target)}">${esc(name)}</button>`;
+  }).join('<span class="muted">/</span>');
+  const added = [...S.st.config.roots, ...S.st.config.extraRepos].map(expandHome);
+  const already = added.includes(d.path);
+  const verdict = d.isRepo
+    ? `<strong>${esc(d.display)}</strong> is a git repo. Its worktrees will be listed.`
+    : d.repoChildren
+      ? `<strong>${esc(d.display)}</strong> contains ${d.repoChildren} git repo${d.repoChildren === 1 ? '' : 's'}. All of them, and their worktrees, will be listed.`
+      : `No git repos directly inside <strong>${esc(d.display)}</strong>. Open a folder that has some, or pick a repo.`;
+  let el = $('#picker');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'picker';
+    el.className = 'modal-backdrop';
+    el.addEventListener('click', (e) => { if (e.target === el) closePicker(); });
+    document.body.appendChild(el);
+  }
+  el.innerHTML = `<div class="modal" role="dialog" aria-modal="true" aria-label="Choose a folder">
+    <div class="modal-head"><span>Choose a folder</span><button class="link-btn" data-act="picker-close" aria-label="Close">✕</button></div>
+    <div class="crumbs">${d.parent ? `<button class="btn small" data-act="picker-go" data-path="${esc(d.parent)}" title="Up one level">↑</button>` : ''}${crumbs}</div>
+    <div class="dir-list">${d.entries.length ? d.entries.map((e) => `
+      <button class="dir ${e.isRepo ? 'repo' : ''}" data-act="picker-go" data-path="${esc(e.path)}">
+        ${e.isRepo ? REPO_ICON : FOLDER_ICON}<span class="dir-name">${esc(e.name)}</span>${e.isRepo ? '<span class="chip open">git repo</span>' : ''}${added.includes(e.path) ? '<span class="chip">added</span>' : ''}
+      </button>`).join('') : '<div class="file-note">No folders here.</div>'}</div>
+    <div class="modal-foot">
+      <div class="verdict">${verdict}</div>
+      <div class="actions">
+        <label class="toggle small"><input type="checkbox" data-act="picker-hidden" ${S.picker.hidden ? 'checked' : ''}> Show hidden</label>
+        <span style="flex:1"></span>
+        <button class="btn" data-act="picker-close">Cancel</button>
+        <button class="btn primary" data-act="picker-add" ${already || (!d.isRepo && !d.repoChildren) ? 'disabled' : ''}>${already ? 'Already added' : d.isRepo ? 'Add this repo' : 'Add this folder'}</button>
+      </div>
+    </div>
+  </div>`;
+  el.querySelector('.dir-list').scrollTop = 0;
+}
+
 // ---------- loading ----------
 
 async function loadView({ quiet = false } = {}) {
@@ -468,7 +770,9 @@ async function loadView({ quiet = false } = {}) {
     ]);
     if (seq !== S.seq) return;
     S.mode = diff.mode;
-    S.view = { wtId: wt.id, diff, files: parseDiff(diff.diff), comments: cm.comments, reviews: cm.reviews, commentSig: wt.comments.sig };
+    S.view = { wtId: wt.id, diff, files: parseDiff(diff.diff), comments: cm.comments, reviews: cm.reviews, commentSig: wt.comments.sig, crSig: wt.coderabbit?.sig };
+    await loadCodeRabbit();
+    if (seq !== S.seq) return;
     S.stale = false;
     renderMain();
   } catch (e) {
@@ -501,7 +805,19 @@ function select(id) {
 
 function onHash() {
   const id = location.hash.replace(/^#\/?/, '') || null;
-  if (id) select(id);
+  if (id === 'settings' || id === 'welcome') {
+    S.page = id;
+    S.selId = null;
+    S.view = null;
+    S.setupSig = S.st ? setupSig(S.st) : null;
+    $('#main').scrollTop = 0;
+    renderSidebar();
+    renderMain();
+    loadIntegrations();
+    return;
+  }
+  S.page = null;
+  if (id) select(id); else { S.selId = null; renderSidebar(); renderMain(); }
 }
 
 // ---------- live updates ----------
@@ -518,6 +834,14 @@ function maybeNotify(st) {
     }
   }
   S.prevStatus = new Map(st.sessions.map((s) => [s.sessionId, s.status]));
+  for (const w of st.worktrees) {
+    const prev = S.prevCr?.get(w.id);
+    if (prev === 'running' && w.coderabbit && w.coderabbit.status !== 'running') {
+      const n = new Notification(`CodeRabbit finished on ${w.branch || 'a worktree'}`, { body: w.coderabbit.total ? `${w.coderabbit.total} finding${w.coderabbit.total === 1 ? '' : 's'}` : 'No findings', tag: `cr-${w.id}` });
+      n.onclick = () => { window.focus(); location.hash = `#/${w.id}`; };
+    }
+  }
+  S.prevCr = new Map(st.worktrees.map((w) => [w.id, w.coderabbit?.status]));
 }
 
 function onState(st) {
@@ -526,11 +850,34 @@ function onState(st) {
   S.st = st;
   renderSidebar();
   const wt = curWt();
-  if (first) { onHash(); return; }
+  if (first) {
+    if (!st.onboardedAt && location.hash !== '#/welcome') location.hash = '#/welcome';
+    else onHash();
+    return;
+  }
+  if (S.page) {
+    const sig = setupSig(st);
+    if (sig === S.setupSig) return;
+    const loginFinished = S.setupSig && JSON.parse(S.setupSig)[0]?.running && !st.coderabbitLogin?.running;
+    S.setupSig = sig;
+    if (loginFinished) loadIntegrations(true);
+    else if (!document.activeElement?.matches('input, select, textarea')) renderMain();
+    return;
+  }
   if (!wt || !S.view || S.view.wtId !== wt.id) { renderMain(); return; }
   if (wt.fingerprint !== S.view.diff.fingerprint) {
     const typing = [...S.editors.entries()].some(([k, val]) => k !== 'summary' && val !== undefined);
     if (typing) { S.stale = true; renderMain(); } else loadView({ quiet: true });
+  } else if ((wt.coderabbit?.sig || null) !== (S.view.crSig || null)) {
+    const was = S.view.cr?.status;
+    S.view.crSig = wt.coderabbit?.sig;
+    loadCodeRabbit().then(() => {
+      if (was === 'running' && S.view.cr && S.view.cr.status !== 'running') {
+        const n = S.view.cr.findings.length;
+        toast(S.view.cr.status === 'done' ? `CodeRabbit finished: ${n ? `${n} finding${n === 1 ? '' : 's'}` : 'no findings'}` : 'CodeRabbit review stopped', S.view.cr.status === 'failed');
+      }
+      if (wt.comments.sig !== S.view.commentSig) { S.view.commentSig = wt.comments.sig; reloadComments(); } else renderMain();
+    });
   } else if (wt.comments.sig !== S.view.commentSig) {
     S.view.commentSig = wt.comments.sig;
     reloadComments();
@@ -539,17 +886,31 @@ function onState(st) {
   }
 }
 
-function connect() {
-  const es = new EventSource('/api/events');
-  es.addEventListener('state', (e) => {
-    $('#conn').textContent = `live · v${JSON.parse(e.data).version}`;
+function onLiveMessage(msg) {
+  if (msg.type === 'state') {
+    const st = JSON.parse(msg.data);
+    $('#conn').textContent = `live · v${st.version}`;
     $('#conn').className = 'brand-sub';
-    onState(JSON.parse(e.data));
-  });
-  es.onerror = () => {
+    onState(st);
+  } else if (msg.type === 'error') {
     $('#conn').textContent = 'server not running — retrying';
     $('#conn').className = 'brand-sub down';
-  };
+  }
+}
+
+function connect() {
+  if ('SharedWorker' in window) {
+    try {
+      const worker = new SharedWorker('/sse-worker.js', { name: 'worktree-review-live' });
+      worker.port.onmessage = (e) => onLiveMessage(e.data);
+      worker.port.start();
+      window.addEventListener('pagehide', () => worker.port.postMessage('close'));
+      return;
+    } catch {}
+  }
+  const es = new EventSource('/api/events');
+  es.addEventListener('state', (e) => onLiveMessage({ type: 'state', data: e.data }));
+  es.onerror = () => onLiveMessage({ type: 'error' });
 }
 
 // ---------- actions ----------
@@ -656,6 +1017,61 @@ const actions = {
   'auto-cleanup': async (el) => { await api('POST', '/api/config', { autoCleanup: el.checked }); },
   'toggle-older': () => { S.showOlder = !S.showOlder; renderSidebar(); },
   'toggle-cleaned': () => { S.showCleaned = !S.showCleaned; renderSidebar(); },
+  'cr-run': async () => {
+    const r = await api('POST', `/api/worktrees/${S.selId}/coderabbit`);
+    S.view.cr = r;
+    indexFindings();
+    toast('CodeRabbit started. This usually takes a few minutes.');
+    renderMain();
+  },
+  'cr-cancel': async () => {
+    if (!confirm('Cancel this CodeRabbit review? Its progress is thrown away.')) return;
+    await api('POST', `/api/worktrees/${S.selId}/coderabbit/cancel`);
+  },
+  'cr-send': async (el) => { await api('POST', `/api/findings/${el.dataset.id}/send`); await loadCodeRabbit(); await reloadComments(); },
+  'cr-dismiss': async (el) => { await api('POST', `/api/findings/${el.dataset.id}/dismiss`); await loadCodeRabbit(); renderMain(); },
+  'cr-restore': async (el) => { await api('POST', `/api/findings/${el.dataset.id}/restore`); await loadCodeRabbit(); renderMain(); },
+  'cr-send-all': async () => {
+    const { sent } = await api('POST', `/api/worktrees/${S.selId}/coderabbit/send-all`);
+    toast(`Added ${sent} finding${sent === 1 ? '' : 's'} to your review as drafts`);
+    await loadCodeRabbit();
+    await reloadComments();
+  },
+  'cr-jump': (el, e) => {
+    e.preventDefault();
+    const f = S.view.files.find((x) => x.path === el.dataset.file);
+    if (!f) { toast('That file isn\'t in this diff view'); return; }
+    if (isCollapsed(f)) { S.toggled.set(f.path, false); renderMain(); }
+    const row = document.querySelector(`tr.line[data-k="${CSS.escape(keyOf(f.path, 'new', el.dataset.line))}"]`);
+    (row || document.getElementById(`f-${fnv(f.path)}`))?.scrollIntoView({ block: 'center' });
+  },
+  recheck: () => { S.integ = null; renderMain(); return loadIntegrations(true); },
+  'copy-text': (el) => copy(el.dataset.text),
+  'cr-login': async () => { await api('POST', '/api/integrations/coderabbit/login'); },
+  'cr-logout': async () => {
+    if (!confirm('Sign out of the CodeRabbit CLI on this machine?')) return;
+    S.integ = await api('POST', '/api/integrations/coderabbit/logout');
+    renderMain();
+  },
+  'open-picker': () => openPicker(S.picker?.data?.path || '~'),
+  'picker-go': (el) => openPicker(el.dataset.path),
+  'picker-hidden': (el) => { S.picker.hidden = el.checked; openPicker(S.picker.data.path); },
+  'picker-close': () => closePicker(),
+  'picker-add': async () => {
+    const d = S.picker.data;
+    const key = d.isRepo ? 'extraRepos' : 'roots';
+    if (S.st.config[key].map(expandHome).includes(d.path)) { toast('Already added'); return; }
+    await saveConfig({ [key]: [...S.st.config[key], d.path] });
+    closePicker();
+  },
+  'remove-folder': (el) => saveConfig({ [el.dataset.key]: S.st.config[el.dataset.key].filter((p) => p !== el.dataset.path) }),
+  'enable-notifications': () => Notification.requestPermission().then(() => { $('#notify').hidden = true; renderMain(); }),
+  'rerun-setup': async () => { await api('POST', '/api/onboarding', { done: false }); location.hash = '#/welcome'; },
+  'finish-setup': async () => {
+    await api('POST', '/api/onboarding', { done: true });
+    const first = grouped(S.st.worktrees).working[0] || S.st.worktrees[0];
+    location.hash = first ? `#/${first.id}` : '#/';
+  },
   'copy-restore': (el) => {
     const c = S.st.cleaned[Number(el.dataset.i)];
     const cmd = c.branchDeleted
@@ -667,7 +1083,7 @@ const actions = {
 
 document.addEventListener('click', (e) => {
   const el = e.target.closest('[data-act]');
-  if (!el || el.tagName === 'SELECT' || (el.type === 'checkbox' && e.type === 'click' && el.dataset.act !== 'viewed' && el.dataset.act !== 'auto-cleanup')) return;
+  if (!el || el.tagName === 'SELECT' || (el.type === 'checkbox' && e.type === 'click' && !['viewed', 'auto-cleanup', 'picker-hidden'].includes(el.dataset.act))) return;
   const fn = actions[el.dataset.act];
   if (!fn) return;
   if (el.tagName === 'A') e.preventDefault();
@@ -677,6 +1093,11 @@ document.addEventListener('click', (e) => {
 document.addEventListener('change', (e) => {
   const el = e.target;
   if (el.dataset.act === 'target') S.summaries[`${S.selId}:target`] = el.value;
+  if (el.dataset.cfg) {
+    const key = el.dataset.cfg;
+    const value = el.type === 'checkbox' ? el.checked : el.type === 'number' ? Number(el.value) : el.value;
+    saveConfig({ [key]: value });
+  }
 });
 
 document.addEventListener('input', (e) => {
@@ -691,6 +1112,7 @@ document.addEventListener('input', (e) => {
 });
 
 document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && $('#picker')) { closePicker(); return; }
   const el = e.target;
   if (!el.dataset?.ek || el.dataset.ek === 'summary') return;
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); saveEditor(el.dataset.ek).catch((err) => toast(err.message, true)); }

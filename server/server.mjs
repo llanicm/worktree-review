@@ -6,7 +6,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import crypto from 'node:crypto';
-import { execFile } from 'node:child_process';
+import { execFile, spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -56,8 +56,12 @@ const state = {
   comments: [],
   reviews: [],
   cleaned: [],
+  coderabbit: {}, // wtId -> last review { status, startedAt, finishedAt, baseRef, findings, reviewedFiles, error }
   ...loadJson(STATE_PATH, {}),
 };
+state.coderabbit ||= {};
+// A review that was running when the server stopped can't be resumed.
+for (const r of Object.values(state.coderabbit)) if (r.status === 'running') { r.status = 'failed'; r.error = 'Interrupted: the server restarted during the review.'; }
 
 let saveTimer = null;
 function save() {
@@ -98,7 +102,7 @@ function run(cmd, args, opts = {}) {
       maxBuffer: 256 * 1024 * 1024,
       timeout: opts.timeout ?? 60_000,
     }, (err, stdout, stderr) => {
-      if (err) { err.message += `\n${stderr}`; reject(err); } else resolve(stdout);
+      if (err) { err.message += `\n${stderr}`; err.stdout = stdout; err.stderr = stderr; reject(err); } else resolve(stdout);
     });
   });
 }
@@ -662,6 +666,264 @@ function claimReviews({ session_id, cwd }) {
   return claimed.length ? claimed.join('\n\n') : null;
 }
 
+// ---------- integrations (gh, CodeRabbit, Claude hooks) ----------
+
+let lastHookAt = null;
+let integrations = { at: 0, data: null, pending: null };
+let crLogin = null; // { running, url, error, startedAt }
+
+async function probe(cmd, args, opts = {}) {
+  try {
+    return { ok: true, out: await run(cmd, args, { timeout: 15_000, ...opts }) };
+  } catch (e) {
+    return { ok: false, missing: e.code === 'ENOENT', out: `${e.stdout || ''}${e.stderr || ''}` };
+  }
+}
+const lastJson = (text) => {
+  const lines = String(text || '').trim().split('\n').reverse();
+  for (const l of lines) { try { return JSON.parse(l); } catch {} }
+  return null;
+};
+
+async function checkIntegrations() {
+  const [ghV, ghAuth, crV, crStatus, crPlain] = await Promise.all([
+    probe('gh', ['--version']),
+    probe('gh', ['auth', 'status', '--hostname', 'github.com']),
+    probe('coderabbit', ['--version']),
+    probe('coderabbit', ['auth', 'status', '--agent']),
+    probe('coderabbit', ['auth', 'status']),
+  ]);
+  const gh = { installed: !ghV.missing, version: ghV.out.match(/gh version (\S+)/)?.[1] || null, authed: ghAuth.ok };
+  gh.account = ghAuth.out.match(/account (\S+)/)?.[1] || null;
+  const st = lastJson(crStatus.out);
+  const cr = { installed: !crV.missing, version: crV.ok ? crV.out.trim().split('\n')[0] : null, authed: !!st?.authenticated };
+  if (st?.authenticated) {
+    cr.user = st.user?.username || st.user?.name;
+    cr.email = st.user?.email;
+    cr.org = st.currentOrg?.name || null;
+    cr.orgs = (st.organizations || []).map((o) => o.name);
+    cr.plan = crPlain.out.match(/Plan\s*:\s*(.+)/)?.[1]?.trim() || null;
+    cr.seat = crPlain.out.match(/Seat\s*:\s*(.+)/)?.[1]?.trim() || null;
+  }
+  return {
+    gh, coderabbit: cr, coderabbitLogin: crLogin,
+    claude: { lastHookAt, sessions: sessions.size, version: VERSION },
+    node: process.version, dataDir: DATA_DIR, configPath: CONFIG_PATH,
+  };
+}
+
+async function getIntegrations(force = false) {
+  if (!force && integrations.data && Date.now() - integrations.at < 60_000) {
+    return { ...integrations.data, coderabbitLogin: crLogin, claude: { lastHookAt, sessions: sessions.size, version: VERSION } };
+  }
+  integrations.pending ||= checkIntegrations().then((data) => {
+    integrations = { at: Date.now(), data, pending: null };
+    return data;
+  }, (e) => { integrations.pending = null; throw e; });
+  return integrations.pending;
+}
+
+function startCodeRabbitLogin() {
+  if (crLogin?.running) return crLogin;
+  crLogin = { running: true, url: null, error: null, startedAt: Date.now() };
+  const child = spawn('coderabbit', ['auth', 'login', '--agent'], { env: process.env });
+  let out = '';
+  const onData = (d) => {
+    out += d;
+    const url = out.match(/https:\/\/app\.coderabbit\.ai\/login[^\s"'\]]*/)?.[0];
+    if (url && !crLogin.url) { crLogin.url = url.replace(/&amp;/g, '&'); changed(); }
+  };
+  child.stdout.on('data', onData);
+  child.stderr.on('data', onData);
+  const timer = setTimeout(() => child.kill(), 5 * 60_000);
+  child.on('error', (e) => { crLogin = { ...crLogin, running: false, error: e.code === 'ENOENT' ? 'CodeRabbit CLI is not installed.' : e.message }; changed(); });
+  child.on('close', async (code) => {
+    clearTimeout(timer);
+    const result = lastJson(out);
+    crLogin = { ...crLogin, running: false, error: code === 0 ? null : (result?.message || result?.error || 'Login did not finish.') };
+    await getIntegrations(true).catch(() => {});
+    changed();
+  });
+  changed();
+  return crLogin;
+}
+
+// Read-only folder listing for the folder picker, limited to the home directory.
+const SKIP_DIRS = new Set(['node_modules', '.git', '.Trash', 'Library', '.cache', '.npm', '.pnpm-store']);
+function listDir(p, showHidden) {
+  const full = path.resolve(expand(p || '~'));
+  if (full !== HOME && !full.startsWith(HOME + path.sep)) throw httpError(403, 'Only folders inside your home directory can be browsed.');
+  let dirents;
+  try { dirents = fs.readdirSync(full, { withFileTypes: true }); } catch { throw httpError(404, `Can't open ${full}`); }
+  const isRepo = (d) => fs.existsSync(path.join(d, '.git'));
+  const entries = [];
+  for (const e of dirents) {
+    if (SKIP_DIRS.has(e.name) || (!showHidden && e.name.startsWith('.'))) continue;
+    const child = path.join(full, e.name);
+    let dir = e.isDirectory();
+    if (!dir && e.isSymbolicLink()) { try { dir = fs.statSync(child).isDirectory(); } catch {} }
+    if (!dir) continue;
+    entries.push({ name: e.name, path: child, isRepo: isRepo(child) });
+    if (entries.length >= 1000) break;
+  }
+  entries.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+  return {
+    path: full,
+    display: full === HOME ? '~' : full.startsWith(HOME + path.sep) ? '~' + full.slice(HOME.length) : full,
+    parent: full === HOME ? null : path.dirname(full),
+    isRepo: isRepo(full),
+    repoChildren: entries.filter((e) => e.isRepo).length,
+    entries,
+  };
+}
+
+// ---------- CodeRabbit reviews ----------
+
+const crChildren = new Map(); // wtId -> child process
+
+function crUsage(wt) {
+  return probe('coderabbit', ['usage', '--agent'], { cwd: wt.path }).then((r) => {
+    const u = lastJson(r.out)?.includedReviews;
+    return u?.state === 'available' ? { limit: u.limit, remaining: u.remaining, fullInMs: u.fullCapacityInMs, windowMs: u.rollingWindowMs, repository: u.repository } : null;
+  });
+}
+
+const asText = (v) => (v == null ? '' : typeof v === 'string' ? v : Array.isArray(v) ? v.map(asText).filter(Boolean).join('\n\n') : typeof v === 'object' ? (v.text || v.code || v.suggestion || v.diff || v.command || JSON.stringify(v, null, 2)) : String(v));
+
+function toFinding(ev) {
+  const start = Number(ev.startLine ?? ev.line ?? ev.lineStart) || null;
+  return {
+    id: newId('f'),
+    severity: String(ev.severity || 'info').toLowerCase(),
+    file: ev.fileName || ev.file || ev.path || '',
+    startLine: start,
+    endLine: Number(ev.endLine ?? ev.lineEnd) || start,
+    title: asText(ev.title),
+    comment: asText(ev.comment),
+    codegen: asText(ev.codegenInstructions),
+    suggestions: asText(ev.suggestions),
+    status: 'open',
+  };
+}
+
+async function startCodeRabbit(wt) {
+  const prev = state.coderabbit[wt.id];
+  if (prev?.status === 'running') throw httpError(409, 'A CodeRabbit review is already running for this worktree.');
+  const integ = await getIntegrations();
+  if (!integ.coderabbit.installed) throw httpError(409, 'The CodeRabbit CLI is not installed. See Settings.');
+  if (!integ.coderabbit.authed) throw httpError(409, 'Sign in to CodeRabbit in Settings first.');
+  await refreshWorktree(wt);
+  const usage = await crUsage(wt);
+  if (usage && usage.remaining <= 0) {
+    throw httpError(429, `No CodeRabbit reviews left for ${usage.repository} this hour. Try again in about ${Math.ceil(usage.fullInMs / 60000)} minutes.`);
+  }
+  const review = {
+    status: 'running', startedAt: Date.now(), finishedAt: null, baseRef: wt.baseRef, fingerprint: wt.fingerprint,
+    findings: [], reviewedFiles: [], error: null, heartbeatAt: Date.now(),
+    usage: usage ? { ...usage, remaining: Math.max(0, usage.remaining - 1) } : null,
+  };
+  state.coderabbit[wt.id] = review;
+  const child = spawn('coderabbit', ['review', '--agent', '--base', wt.baseRef, '--include-untracked'], { cwd: wt.path, env: process.env });
+  crChildren.set(wt.id, child);
+  let buf = '', errText = '';
+  const handle = (line) => {
+    let ev;
+    try { ev = JSON.parse(line); } catch { return; }
+    review.heartbeatAt = Date.now();
+    if (ev.type === 'finding') {
+      const f = toFinding(ev);
+      try {
+        const lines = fs.readFileSync(path.join(wt.path, f.file), 'utf8').split('\n');
+        if (f.startLine) f.snippet = lines.slice(f.startLine - 1, Math.min(f.endLine || f.startLine, f.startLine + 4)).join('\n');
+      } catch {}
+      review.findings.push(f);
+    }
+    else if (ev.type === 'complete') { review.reviewedFiles = ev.reviewedFiles || []; review.message = ev.message; }
+    else if (ev.type === 'error') review.error = ev.message || ev.error || 'CodeRabbit reported an error.';
+    else if (ev.type === 'status' && ev.message) review.message = ev.message;
+    save();
+    changed();
+  };
+  child.stdout.on('data', (d) => {
+    buf += d;
+    let i;
+    while ((i = buf.indexOf('\n')) !== -1) { handle(buf.slice(0, i)); buf = buf.slice(i + 1); }
+  });
+  child.stderr.on('data', (d) => { errText = (errText + d).slice(-4000); });
+  child.on('error', (e) => { review.status = 'failed'; review.error = e.message; save(); changed(); });
+  child.on('close', (code, signal) => {
+    if (buf.trim()) handle(buf);
+    crChildren.delete(wt.id);
+    review.finishedAt = Date.now();
+    if (review.status === 'cancelled') { /* set by cancel */ }
+    else if (code === 0 && !review.error) review.status = 'done';
+    else {
+      review.status = 'failed';
+      review.error ||= signal ? `Stopped (${signal}).` : (errText.trim().split('\n').pop() || `CodeRabbit exited with code ${code}.`);
+    }
+    log(`CodeRabbit review ${review.status} for ${wt.path}: ${review.findings.length} findings`);
+    save();
+    changed();
+  });
+  save();
+  changed();
+  return review;
+}
+
+function getFinding(fid) {
+  for (const [wtId, r] of Object.entries(state.coderabbit)) {
+    const f = r.findings?.find((x) => x.id === fid);
+    if (f) return { wtId, review: r, finding: f };
+  }
+  throw httpError(404, 'Unknown finding');
+}
+
+function findingToComment(wtId, f) {
+  const wt = getWt(wtId);
+  const parts = [`**CodeRabbit (${f.severity})${f.title ? `: ${f.title}` : ''}**`];
+  if (f.comment && f.comment !== f.title) parts.push(f.comment);
+  if (f.suggestions) parts.push(`Suggested change:\n\`\`\`\n${f.suggestions}\n\`\`\``);
+  if (f.codegen && f.codegen !== f.comment) parts.push(`Fix guidance from CodeRabbit:\n${f.codegen}`);
+  const c = {
+    id: newId('c'), wtId: wt.id, wtPath: wt.path, file: f.file, line: f.endLine || f.startLine || 1, side: 'new',
+    lineText: '', body: parts.join('\n\n'), status: 'draft', createdAt: Date.now(), replies: [], fromFinding: f.id,
+  };
+  try {
+    const text = fs.readFileSync(path.join(wt.path, f.file), 'utf8').split('\n');
+    c.lineText = text[(c.line || 1) - 1] ?? '';
+  } catch {}
+  state.comments.push(c);
+  f.status = 'sent';
+  f.commentId = c.id;
+  return c;
+}
+
+const CONFIG_RULES = {
+  autoCleanup: (v) => typeof v === 'boolean',
+  editor: (v) => ['vscode', 'cursor', 'windsurf', 'zed', 'none'].includes(v),
+  recentDays: (v) => Number.isInteger(v) && v >= 1 && v <= 90,
+  prPollMinutes: (v) => Number.isInteger(v) && v >= 1 && v <= 60,
+  roots: (v) => Array.isArray(v) && v.every((p) => typeof p === 'string'),
+  extraRepos: (v) => Array.isArray(v) && v.every((p) => typeof p === 'string'),
+};
+
+async function updateConfig(body) {
+  const errors = [];
+  for (const [k, v] of Object.entries(body)) {
+    if (!CONFIG_RULES[k]) continue;
+    if (!CONFIG_RULES[k](v)) { errors.push(`Invalid value for ${k}`); continue; }
+    if (k === 'roots' || k === 'extraRepos') {
+      const missing = v.filter((p) => !fs.existsSync(expand(p.trim())));
+      if (missing.length) { errors.push(`Folder not found: ${missing.join(', ')}`); continue; }
+      config[k] = [...new Set(v.map((p) => p.trim()).filter(Boolean))];
+    } else config[k] = v;
+  }
+  if (errors.length) throw httpError(400, errors.join('; '));
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n');
+  if ('roots' in body || 'extraRepos' in body) await discoverWorktrees();
+  changed();
+}
+
 // ---------- public state & SSE ----------
 
 let dirty = true;
@@ -674,7 +936,14 @@ function publicState() {
     version: VERSION,
     home: HOME,
     prError,
-    config: { autoCleanup: config.autoCleanup, recentDays: cfgDays, editor: config.editor },
+    config: {
+      autoCleanup: config.autoCleanup, recentDays: cfgDays, editor: config.editor,
+      prPollMinutes: config.prPollMinutes, roots: config.roots, extraRepos: config.extraRepos,
+    },
+    onboardedAt: state.onboardedAt || null,
+    repos: [...repos.values()].map((r) => ({ name: r.name, root: r.root, github: r.gh ? `${r.gh.owner}/${r.gh.name}` : null })),
+    coderabbitLogin: crLogin,
+    coderabbitReady: !!(integrations.data?.coderabbit.installed && integrations.data?.coderabbit.authed),
     installedAt: state.installedAt,
     sessions: [...sessions.values()].map((s) => ({ sessionId: s.sessionId, name: s.name, status: s.status, cwd: s.cwd })),
     cleaned: state.cleaned.slice(0, 30),
@@ -689,6 +958,15 @@ function publicState() {
         pr: wt.pr ? { number: wt.pr.number, state: wt.pr.state, isDraft: wt.pr.isDraft, url: wt.pr.url, title: wt.pr.title, mergedAt: wt.pr.mergedAt } : null,
         sessions: wt.sessions.map((x) => ({ sessionId: x.sessionId, name: x.name, status: x.status })),
         cleanup: cleanupStatus(wt),
+        coderabbit: (() => {
+          const r = state.coderabbit[wt.id];
+          if (!r) return null;
+          return {
+            status: r.status, startedAt: r.startedAt, finishedAt: r.finishedAt, heartbeatAt: r.heartbeatAt,
+            open: r.findings.filter((f) => f.status === 'open').length, total: r.findings.length,
+            sig: sha1(r.status + r.findings.map((f) => f.id + f.status).join()).slice(0, 10),
+          };
+        })(),
         review: {
           reviewedAt: s.reviewedAt || null,
           needsReview: !!wt.fingerprint && (wt.stats?.files || 0) > 0 && s.reviewedFp !== wt.fingerprint,
@@ -803,9 +1081,51 @@ const routes = [
     }
     return { removed, failed };
   }],
-  ['POST', /^\/api\/config$/, (m, body) => {
-    if (typeof body.autoCleanup === 'boolean') config.autoCleanup = body.autoCleanup;
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n');
+  ['POST', /^\/api\/config$/, async (m, body) => { await updateConfig(body); return { ok: true }; }],
+  ['GET', /^\/api\/worktrees\/(\w+)\/coderabbit$/, async (m, body, url) => {
+    const wt = getWt(m[1]);
+    const review = state.coderabbit[wt.id] || null;
+    return { review, usage: url.searchParams.has('usage') ? await crUsage(wt) : review?.usage || null };
+  }],
+  ['POST', /^\/api\/worktrees\/(\w+)\/coderabbit$/, (m) => startCodeRabbit(getWt(m[1]))],
+  ['POST', /^\/api\/worktrees\/(\w+)\/coderabbit\/cancel$/, (m) => {
+    const r = state.coderabbit[m[1]];
+    const child = crChildren.get(m[1]);
+    if (!r || r.status !== 'running') throw httpError(409, 'No review is running.');
+    r.status = 'cancelled';
+    r.error = 'Cancelled. CodeRabbit discards a review that is stopped early.';
+    child?.kill();
+    save();
+    changed();
+    return { ok: true };
+  }],
+  ['POST', /^\/api\/findings\/(\w+)\/(send|dismiss|restore)$/, (m) => {
+    const { wtId, finding } = getFinding(m[1]);
+    if (m[2] === 'send') findingToComment(wtId, finding);
+    else if (m[2] === 'dismiss') finding.status = 'dismissed';
+    else finding.status = 'open';
+    save();
+    changed();
+    return finding;
+  }],
+  ['POST', /^\/api\/worktrees\/(\w+)\/coderabbit\/send-all$/, (m) => {
+    const r = state.coderabbit[getWt(m[1]).id];
+    const open = (r?.findings || []).filter((f) => f.status === 'open');
+    for (const f of open) findingToComment(m[1], f);
+    save();
+    changed();
+    return { sent: open.length };
+  }],
+  ['GET', /^\/api\/fs$/, (m, body, url) => listDir(url.searchParams.get('path'), url.searchParams.get('hidden') === '1')],
+  ['GET', /^\/api\/integrations$/, (m, body, url) => getIntegrations(url.searchParams.has('refresh'))],
+  ['POST', /^\/api\/integrations\/coderabbit\/login$/, () => startCodeRabbitLogin()],
+  ['POST', /^\/api\/integrations\/coderabbit\/logout$/, async () => {
+    await probe('coderabbit', ['auth', 'logout', '--agent']);
+    return getIntegrations(true);
+  }],
+  ['POST', /^\/api\/onboarding$/, (m, body) => {
+    state.onboardedAt = body.done === false ? null : Date.now();
+    save();
     changed();
     return { ok: true };
   }],
@@ -873,6 +1193,7 @@ const routes = [
   }],
   ['POST', /^\/api\/shutdown$/, () => { setTimeout(() => process.exit(0), 100); return { ok: true }; }],
   ['POST', /^\/api\/hook$/, (m, body) => {
+    lastHookAt = Date.now();
     refreshSessions();
     return { text: claimReviews(body) };
   }],
@@ -920,7 +1241,7 @@ const server = http.createServer(async (req, res) => {
 
 async function loop(fn, ms) {
   try { await fn(); } catch (e) { log('loop error', e.message); }
-  setTimeout(() => loop(fn, ms), ms);
+  setTimeout(() => loop(fn, ms), typeof ms === 'function' ? ms() : ms);
 }
 
 server.on('error', (e) => {
@@ -932,8 +1253,9 @@ server.listen(PORT, '127.0.0.1', async () => {
   log(`Worktree Review ${VERSION} on http://127.0.0.1:${PORT}  (data: ${DATA_DIR})`);
   await discoverWorktrees();
   refreshSessions();
+  getIntegrations().then(changed, () => {});
   loop(discoverWorktrees, 30_000);
   loop(async () => refreshSessions(), 3_000);
   loop(pollWorktrees, 1_000);
-  setTimeout(() => loop(refreshPRs, config.prPollMinutes * 60_000), 5_000);
+  setTimeout(() => loop(refreshPRs, () => config.prPollMinutes * 60_000), 5_000);
 });
