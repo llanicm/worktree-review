@@ -263,6 +263,19 @@ export async function get(path: string, retries = 2): Promise<unknown> {
 git(REPO, ['update-ref', 'refs/remotes/origin/refactor/api-client', apiHead]);
 write(apiWt, { 'package-lock.json': '{\n  "name": "shop",\n  "lockfileVersion": 3,\n  "requires": true,\n  "packages": { "": { "name": "shop" } }\n}\n' });
 
+// WTR_DEMO_BIG=1: a large worktree for benchmarks (test/bench.ts): 20 commits over 80 files.
+if (process.env.WTR_DEMO_BIG) {
+  const big = worktree('feat/big-refactor', 'big-refactor', now - 3 * HOUR);
+  const fn = (f, i, c) => `export function step${i}_${c}(input: number[]): number {\n  let total = 0;\n  for (const n of input) {\n    if (n % ${i + 2} === 0) total += n * ${c + 1};\n    else total -= Math.floor(n / ${i + 1});\n  }\n  return total; // ${f}\n}\n`;
+  for (let c = 0; c < 20; c++) {
+    const files = {};
+    for (let f = c * 4; f < c * 4 + 4; f++) files[`src/modules/m${f}.ts`] = Array.from({ length: 12 }, (_, i) => fn(f, i, c)).join('\n');
+    // Later commits also edit earlier files, so lines come from many commits.
+    if (c > 0) files[`src/modules/m${(c - 1) * 4}.ts`] = fs.readFileSync(path.join(big, `src/modules/m${(c - 1) * 4}.ts`), 'utf8').replace(/total \+= n/g, `total += n + ${c}`);
+    commit(big, `Refactor step ${c + 1}: modules ${c * 4}-${c * 4 + 3}`, files, now - (3 - c * 0.1) * HOUR);
+  }
+}
+
 // 6. An old spike nothing has touched in weeks.
 const spike = worktree('spike/graphql-gateway', 'graphql-spike', now - 19 * DAY);
 commit(spike, 'Sketch a GraphQL gateway over the REST API', {

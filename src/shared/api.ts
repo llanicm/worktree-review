@@ -296,6 +296,14 @@ export interface Comment {
   resolvedAt?: number;
   /** Set when it came from a CodeRabbit finding. */
   fromFinding?: string;
+  /** Set when it was handed to a Claude session. */
+  deliveredTo?: DeliveredTo;
+}
+
+/** Which session a review or comment was delivered to; the fields are unset when the hook sent no session id. */
+export interface DeliveredTo {
+  sessionId?: string;
+  name?: string;
 }
 
 export interface Review {
@@ -309,6 +317,7 @@ export interface Review {
   status: 'pending' | 'delivered' | 'cancelled';
   createdAt: number;
   deliveredAt?: number;
+  deliveredTo?: DeliveredTo;
 }
 
 /** GET /api/worktrees/:id/comments */
@@ -416,6 +425,32 @@ export interface DirListing {
 export interface RepairResult {
   fixed: { path: string; branch: string | null }[];
   failed: { id: string; path: string; branch: string | null; error: string }[];
+}
+
+/** Body of the routes that just acknowledge. */
+export interface Ok {
+  ok: true;
+}
+
+/** GET /api/worktrees/:id/prompt */
+export interface PromptResponse {
+  text: string;
+}
+
+/** POST /api/worktrees/:id/coderabbit/send-all */
+export interface SendAllResponse {
+  sent: number;
+}
+
+/** POST /api/shutdown. `deferred` is set when a removal is still running, so the server stops after it. */
+export interface ShutdownResponse {
+  ok: true;
+  deferred?: true;
+}
+
+/** POST /api/hook: the review text to hand to Claude, or null when there is none. */
+export interface HookResponse {
+  text: string | null;
 }
 
 /** Body of every error response. */
