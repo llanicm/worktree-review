@@ -69,7 +69,8 @@ const S = {
   stale: false,
   summaries: {},     // wtId -> review summary draft
   prevStatus: new Map(),
-  page: null,        // 'settings' | 'welcome' | null
+  page: null,        // 'settings' | 'welcome' | 'cleanup' | null
+  cleanSel: new Map(), // clean-up page: worktree id -> ticked
   shutCommits: new Set(), // collapsed commit sections in By commit view
   openBodies: new Set(),  // commit messages expanded past the clamp
   removeErrors: {},       // wtId -> why the last removal failed
@@ -137,7 +138,8 @@ function renderSidebar() {
   const f = S.filter.toLowerCase();
   const list = S.st.worktrees.filter((w) => !f || (w.branch || '').toLowerCase().includes(f) || w.path.toLowerCase().includes(f));
   const g = grouped(list);
-  const safe = g.merged.filter((w) => w.cleanup?.eligible).length;
+  const safe = g.merged.filter((w) => w.cleanup?.kind === 'merged' && w.cleanup.eligible).length;
+  const idle = S.st.worktrees.filter((w) => w.cleanup && !w.sessions.length).length;
   const parts = [];
   const section = (title, items, opts = {}) => {
     if (!items.length && !opts.always) return;
@@ -163,12 +165,15 @@ function renderSidebar() {
     hidden: !S.showOlder && !f,
     right: f ? '' : `<button class="link-btn" data-act="toggle-older">${S.showOlder ? 'hide' : 'show'}</button>`,
   });
+  if (idle && !f) {
+    parts.push(`<div class="group-tools"><a class="link-btn" href="#/cleanup">Clean up worktrees no session is using (${idle})</a></div>`);
+  }
   if (S.st.cleaned.length) {
     parts.push(`<div class="group-head"><span>Cleaned up <span class="count">${S.st.cleaned.length}</span></span>
       <button class="link-btn" data-act="toggle-cleaned">${S.showCleaned ? 'hide' : 'show'}</button></div>`);
     if (S.showCleaned) {
       parts.push(`<div class="cleaned">${S.st.cleaned.map((c, i) => `<div class="item">
-        <div><strong>${esc(c.branch)}</strong> · <a href="${esc(c.pr.url)}" target="_blank">#${c.pr.number}</a> · ${c.how === 'auto' ? 'auto' : c.how === 'forced' ? 'removed anyway' : 'by you'} ${ago(c.at)}</div>
+        <div><strong>${esc(c.branch || `detached @ ${c.sha.slice(0, 8)}`)}</strong>${c.pr ? ` · <a href="${esc(c.pr.url)}" target="_blank">#${c.pr.number}</a>` : ''} · ${c.how === 'auto' ? 'auto' : c.how === 'forced' ? 'removed anyway' : 'by you'} ${ago(c.at)}${c.reason === 'idle' ? ' · unmerged' : ''}</div>
         ${c.branchKept ? `<div>Branch ${esc(c.branchKept)}</div>` : ''}
         <div class="mono">${esc(shortPath(c.path))}</div>
         <button class="link-btn" data-act="copy-restore" data-i="${i}">Copy restore command</button>
@@ -467,7 +472,7 @@ function renderMain() {
   const main = $('#main');
   if (S.page) {
     const scroll = main.scrollTop;
-    main.innerHTML = setupHtml(S.page);
+    main.innerHTML = S.page === 'cleanup' ? cleanupPageHtml() : setupHtml(S.page);
     main.scrollTop = scroll;
     return;
   }
@@ -572,7 +577,13 @@ function headerHtml(wt) {
         ${wt.error.kind === 'broken-link' ? '<div class="actions" style="margin-top:8px"><button class="btn primary" data-act="repair">Repair links</button></div>' : ''}</div>`
     : '';
   const removeErr = S.removeErrors[wt.id] ? `<div class="callout danger"><strong>Couldn't remove this worktree.</strong><p>${esc(S.removeErrors[wt.id])}</p></div>` : '';
-  if (cs) {
+  if (cs?.kind === 'idle' && !wt.sessions.length && (cs.eligible || cs.forceable)) {
+    cleanup = `<div class="callout small">No Claude session is using this worktree.
+      ${wt.busy ? '<span class="muted"><span class="dot busy"></span> Removing…</span>'
+        : cs.eligible ? '<button class="link-btn" data-act="remove">Remove it</button> (the branch is kept)'
+        : `<button class="link-btn" data-act="remove-anyway">Remove anyway…</button> <span class="muted">(${esc(cs.reasons.join('; '))})</span>`}
+      · <a class="link-btn" href="#/cleanup">Clean up others</a></div>`;
+  } else if (cs?.kind === 'merged') {
     const STATUS = { ' M': 'modified', 'M ': 'staged', MM: 'staged + modified', 'A ': 'new, staged', AM: 'new, staged', ' D': 'missing', 'D ': 'deleted, staged', '??': 'untracked', 'R ': 'renamed' };
     const files = cs.dirty ? `<details ${cs.dirty.kind === 'work' && cs.dirty.count <= 20 ? 'open' : ''}><summary>${cs.dirty.count} uncommitted file${cs.dirty.count === 1 ? '' : 's'}</summary>
         <ul class="file-list">${cs.dirty.files.map((f) => `<li><code>${esc(f.file)}</code> <span class="muted small">${esc(STATUS[f.xy] || f.xy.trim())}</span></li>`).join('')}${cs.dirty.count > cs.dirty.files.length ? `<li class="muted">…and ${cs.dirty.count - cs.dirty.files.length} more</li>` : ''}</ul></details>` : '';
@@ -813,6 +824,7 @@ function setupHtml(mode) {
 }
 
 function setupSig(st) {
+  if (S.page === 'cleanup') return JSON.stringify([st.jobs, st.worktrees.map((w) => [w.id, w.cleanup, w.busy, w.sessions.length, w.pr?.state])]);
   return JSON.stringify([st.coderabbitLogin, st.config, st.repos, st.sessions.length, st.worktrees.length, st.onboardedAt]);
 }
 
@@ -856,6 +868,63 @@ function renderJobs() {
     if (!j.failed.length) setTimeout(() => api('POST', `/api/jobs/${j.id}/dismiss`).catch(() => {}), 6000);
     if (j.failed.length && S.selId && j.failed.some((f) => f.id === S.selId)) renderMain();
   }
+}
+
+// ---------- clean-up page ----------
+// Every worktree no Claude session is using, merged or not, sorted by whether it can go.
+
+function cleanupGroups() {
+  const g = { ready: [], look: [], blocked: [] };
+  for (const w of S.st.worktrees) {
+    const cs = w.cleanup;
+    if (!cs || w.sessions.length) continue;
+    (cs.eligible && !w.busy ? g.ready : cs.forceable ? g.look : g.blocked).push(w);
+  }
+  for (const k of Object.keys(g)) g[k].sort((a, b) => a.lastActivity - b.lastActivity);
+  return g;
+}
+
+// Picked unless you unticked it. Anything touched in the last few days starts unticked.
+function cleanPicked(w) {
+  if (S.cleanSel.has(w.id)) return S.cleanSel.get(w.id);
+  return w.cleanup.kind === 'merged' || w.pr?.state === 'CLOSED' || Date.now() - w.lastActivity > S.st.config.recentDays * 864e5;
+}
+
+function cleanRow(w, { pick = false, open = false } = {}) {
+  const cs = w.cleanup;
+  const name = w.branch || `detached @ ${w.head?.slice(0, 8) || '?'}`;
+  const notes = [...(pick ? [] : cs.reasons), ...cs.notes];
+  return `<label class="clean-row ${pick ? '' : 'static'}">
+    ${pick ? `<input type="checkbox" data-act="clean-pick" data-id="${w.id}" ${cleanPicked(w) ? 'checked' : ''}>` : ''}
+    <div class="clean-main">
+      <div><strong>${esc(name)}</strong> ${prChip(w.pr)} ${w.busy ? '<span class="chip busy-chip"><span class="dot busy"></span>removing…</span>' : ''}
+        <span class="muted small">${esc(w.repoName)} · ${esc(shortPath(w.path))} · ${ago(w.lastActivity)}</span>
+        ${open ? `<a class="link-btn" href="#/${w.id}">open</a>` : ''}</div>
+      ${notes.length ? `<ul class="notes">${notes.map((n) => `<li>${esc(n)}</li>`).join('')}</ul>` : ''}
+    </div></label>`;
+}
+
+function cleanupPageHtml() {
+  const g = cleanupGroups();
+  const picked = g.ready.filter(cleanPicked).length;
+  const running = S.st.jobs.some((j) => j.kind === 'cleanup' && j.status === 'running');
+  const inUse = S.st.worktrees.filter((w) => w.cleanup && w.sessions.length).length;
+  const sec = (title, sub, items, opts) => items.length ? `<section class="clean-sec"><h2>${title} <span class="count">${items.length}</span>${opts.tools || ''}</h2>
+      ${sub ? `<p class="muted small">${sub}</p>` : ''}${items.map((w) => cleanRow(w, opts)).join('')}</section>` : '';
+  return `<div class="page setup clean-page">
+    <h1>Clean up worktrees</h1>
+    <p class="muted">Worktrees no Claude session is using${inUse ? ` (${inUse} in use ${inUse === 1 ? 'is' : 'are'} left out)` : ''}. Removing one deletes its folder.
+      Branches are kept, except a merged branch whose commits are all in its PR, and every removal can be restored from <em>Cleaned up</em> in the sidebar.</p>
+    ${!g.ready.length && !g.look.length && !g.blocked.length ? '<div class="empty">Nothing to clean up.</div>' : ''}
+    ${sec('Ready to remove', `Nothing uncommitted would be lost. Ones changed in the last ${S.st.config.recentDays} days start unticked.`, g.ready, {
+      pick: true,
+      tools: ` <span class="clean-tools"><button class="link-btn" data-act="clean-all" data-on="1">all</button> <button class="link-btn" data-act="clean-all" data-on="0">none</button></span>`,
+    })}
+    ${sec('Need a look first', 'Removing these would lose uncommitted changes or unsent comments. Open one to see the files and use <em>Remove anyway</em>.', g.look, { open: true })}
+    ${sec("Can't be removed", '', g.blocked, { open: true })}
+    ${g.ready.length ? `<div class="clean-foot"><button class="btn danger" data-act="clean-run" ${picked && !running ? '' : 'disabled'}>Remove ${picked} worktree${picked === 1 ? '' : 's'}</button>
+      ${running ? '<span class="muted small">A clean-up is running; see the sidebar.</span>' : ''}</div>` : ''}
+  </div>`;
 }
 
 // ---------- results dialog (bulk cleanup / repair) ----------
@@ -1020,7 +1089,7 @@ function select(id) {
 
 function onHash() {
   const id = location.hash.replace(/^#\/?/, '') || null;
-  if (id === 'settings' || id === 'welcome') {
+  if (id === 'settings' || id === 'welcome' || id === 'cleanup') {
     S.page = id;
     S.selId = null;
     S.view = null;
@@ -1076,7 +1145,7 @@ function onState(st) {
     const loginFinished = S.setupSig && JSON.parse(S.setupSig)[0]?.running && !st.coderabbitLogin?.running;
     S.setupSig = sig;
     if (loginFinished) loadIntegrations(true);
-    else if (!document.activeElement?.matches('input, select, textarea')) renderMain();
+    else if (S.page === 'cleanup' || !document.activeElement?.matches('input, select, textarea')) renderMain();
     return;
   }
   if (!wt || !S.view || S.view.wtId !== wt.id) { renderMain(); return; }
@@ -1253,7 +1322,11 @@ const actions = {
   },
   'cancel-review': async (el) => { await api('POST', `/api/reviews/${el.dataset.id}/cancel`); await reloadComments(); },
   remove: async () => {
-    if (!confirm('Remove this worktree? Its branch is deleted too if it matches the merged PR.')) return;
+    const wt = curWt();
+    const msg = wt.cleanup?.kind === 'idle'
+      ? `Remove this worktree?\n\nIts folder is deleted. ${wt.branch ? `The branch ${wt.branch} is kept, so its commits are safe` : 'Its commit is on a branch, so nothing is lost'}, and you can restore it from Cleaned up.`
+      : 'Remove this worktree? Its branch is deleted too if it matches the merged PR.';
+    if (!confirm(msg)) return;
     delete S.removeErrors[S.selId];
     await api('POST', `/api/worktrees/${S.selId}/remove`);
   },
@@ -1262,18 +1335,29 @@ const actions = {
     const cs = wt.cleanup;
     const lost = cs.dirty ? cs.dirty.files.map((f) => `  • ${f.file}`).join('\n') + (cs.dirty.count > cs.dirty.files.length ? `\n  …and ${cs.dirty.count - cs.dirty.files.length} more` : '') : '';
     const comments = wt.comments.draft + wt.comments.waiting;
-    const msg = [`Remove ${wt.branch} anyway?`, '',
+    const msg = [`Remove ${wt.branch || 'this worktree'} anyway?`, '',
       lost ? `These uncommitted changes will be lost:\n${lost}` : '',
       comments ? `${comments} unsent review comment${comments === 1 ? '' : 's'} will stay in the dashboard's history but can't be delivered.` : '',
-      '', `The branch ${wt.branch} is kept, so its commits are safe.`].filter((l, i, a) => l || a[i - 1]).join('\n');
+      '', wt.branch ? `The branch ${wt.branch} is kept, so its commits are safe.` : ''].filter((l, i, a) => l || a[i - 1]).join('\n');
     if (!confirm(msg)) return;
     delete S.removeErrors[wt.id];
     await api('POST', `/api/worktrees/${wt.id}/remove`, { force: true });
   },
   'cleanup-safe': async () => {
-    const n = S.st.worktrees.filter((w) => w.cleanup?.eligible).length;
+    const n = S.st.worktrees.filter((w) => w.cleanup?.kind === 'merged' && w.cleanup.eligible).length;
     if (!confirm(`Remove ${n} merged worktree${n === 1 ? '' : 's'} that are clean and not in use? This runs in the background.`)) return;
     await api('POST', '/api/cleanup/safe');
+  },
+  'clean-pick': (el) => { S.cleanSel.set(el.dataset.id, el.checked); renderMain(); },
+  'clean-all': (el) => { for (const w of cleanupGroups().ready) S.cleanSel.set(w.id, el.dataset.on === '1'); renderMain(); },
+  'clean-run': async () => {
+    const ids = cleanupGroups().ready.filter((w) => cleanPicked(w)).map((w) => w.id);
+    if (!ids.length) return;
+    const merged = ids.filter((id) => S.st.worktrees.find((w) => w.id === id)?.cleanup.branchSafe).length;
+    const msg = `Remove ${ids.length} worktree${ids.length === 1 ? '' : 's'}?\n\nTheir folders are deleted. ${merged ? `${merged} merged branch${merged === 1 ? ' is' : 'es are'} deleted too, because everything on ${merged === 1 ? 'it is' : 'them is'} in the merged PR. ` : ''}Every other branch is kept, and each removal can be restored from Cleaned up. This runs in the background.`;
+    if (!confirm(msg)) return;
+    await api('POST', '/api/cleanup', { ids });
+    for (const id of ids) S.cleanSel.delete(id);
   },
   'job-dismiss': (el) => api('POST', `/api/jobs/${el.dataset.id}/dismiss`),
   'job-details': (el) => {
@@ -1358,8 +1442,8 @@ const actions = {
   },
   'copy-restore': (el) => {
     const c = S.st.cleaned[Number(el.dataset.i)];
-    const cmd = c.branchDeleted
-      ? `git -C ${c.repoRoot} worktree add -b ${c.branch} ${c.path} ${c.sha}`
+    const cmd = !c.branch ? `git -C ${c.repoRoot} worktree add --detach ${c.path} ${c.sha}`
+      : c.branchDeleted ? `git -C ${c.repoRoot} worktree add -b ${c.branch} ${c.path} ${c.sha}`
       : `git -C ${c.repoRoot} worktree add ${c.path} ${c.branch}`;
     copy(cmd, 'Restore command copied');
   },
@@ -1367,7 +1451,7 @@ const actions = {
 
 document.addEventListener('click', (e) => {
   const el = e.target.closest('[data-act]');
-  if (!el || el.tagName === 'SELECT' || (el.type === 'checkbox' && e.type === 'click' && !['viewed', 'auto-cleanup', 'picker-hidden'].includes(el.dataset.act))) return;
+  if (!el || el.tagName === 'SELECT' || (el.type === 'checkbox' && e.type === 'click' && !['viewed', 'auto-cleanup', 'picker-hidden', 'clean-pick'].includes(el.dataset.act))) return;
   const fn = actions[el.dataset.act];
   if (!fn) return;
   if (el.tagName === 'A') e.preventDefault();

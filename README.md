@@ -34,6 +34,12 @@ lands, before anything becomes a PR.
   and it has no unsent comments. Otherwise it tells you why it stayed. Only PRs merged
   after you install are cleaned up automatically. Older ones wait for *Remove N safe now*.
   Every removal has a restore command under *Cleaned up*.
+- **Clear out worktrees nothing is using.** *Clean up worktrees no session is using*, at the
+  bottom of the sidebar, lists every worktree without a live Claude session, merged or not, sorted
+  into ready to remove, needs a look first (uncommitted changes or unsent comments) and can't be
+  removed. Tick the ones to go and remove them in the background. Unmerged branches are always
+  kept, so only the folder goes. A detached HEAD with commits on no branch, or anything changed in
+  the last 10 minutes, is never removed. This is never automatic.
 
 ## Install
 

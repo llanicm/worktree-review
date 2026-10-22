@@ -547,3 +547,17 @@ td.code .cbar { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; back
 .callout details summary { cursor: pointer; color: var(--accent); }
 .file-list { margin: 6px 0 0; padding-left: 18px; max-height: 220px; overflow: auto; font-size: 12px; }
 .file-list li { margin: 1px 0; }
+
+/* clean-up page */
+.clean-page h1 { margin: 0 0 6px; font-size: 22px; }
+.clean-sec { margin-top: 22px; }
+.clean-sec h2 { font-size: 15px; margin: 0 0 4px; display: flex; align-items: baseline; gap: 8px; }
+.clean-sec h2 .count { color: var(--fg-muted); font-weight: 400; font-size: 13px; }
+.clean-tools { margin-left: auto; font-weight: 400; font-size: 12px; }
+.clean-row { display: flex; gap: 10px; align-items: flex-start; padding: 8px 10px; border: 1px solid var(--border); border-radius: 8px; margin-top: 6px; cursor: pointer; }
+.clean-row.static { cursor: default; }
+.clean-row input { margin-top: 3px; }
+.clean-row .clean-main { min-width: 0; flex: 1; }
+.clean-row .clean-main > div:first-child { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
+.clean-row .notes { margin: 4px 0 0; padding-left: 18px; color: var(--fg-muted); font-size: 12px; }
+.clean-foot { position: sticky; bottom: 0; background: var(--bg); padding: 12px 0; margin-top: 16px; border-top: 1px solid var(--border); display: flex; gap: 12px; align-items: center; }

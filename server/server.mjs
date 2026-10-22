@@ -357,6 +357,11 @@ async function refreshWorktree(wt, { force = false } = {}) {
       wt.stackBase = await detectStackBase(wt, repo);
       wt.headInMerged = null;
       wt.unmatched = null;
+      // Commits no remote has (lost with the branch if it's ever deleted), and, for a detached
+      // HEAD, commits on no ref at all (lost with the worktree, since only its HEAD points at them).
+      const count = async (args) => Number((await git(wt.path, ['rev-list', '--count', 'HEAD', '--not', ...args]).catch(() => '-1')).trim());
+      wt.unpushed = await count(['--remotes']);
+      wt.orphaned = wt.detached ? await count(['--branches', '--remotes', '--tags']) : 0;
     }
     wt.dirty = entries.length;
     wt.dirtyFiles = entries.slice(0, 50).map((e) => ({ xy: e.xy, file: e.file }));
@@ -546,14 +551,16 @@ function openReviewItems(wtId) {
   return state.comments.filter((c) => c.wtId === wtId && (c.status === 'draft' || c.status === 'pending')).length;
 }
 
-function cleanupStatus(wt, { ignoreBusy = false } = {}) {
-  const pr = wt.pr;
-  if (!pr || pr.state !== 'MERGED' || wt.isMain || !wt.branch) return null;
-  // Removing the worktree only risks uncommitted work; commits live on the branch, which
-  // is only deleted when everything on it is in the merged PR.
-  const reasons = [];   // block removal
-  const notes = [];     // don't block, but worth knowing
-  let forceable = true; // can "Remove anyway" override every reason?
+function cleanupStatus(wt, opts) {
+  if (wt.isMain) return null;
+  if (wt.pr?.state === 'MERGED' && wt.branch) return mergedStatus(wt, opts);
+  return idleStatus(wt, opts);
+}
+
+// Reasons that apply to removing any worktree: what git can't do, and what would be lost.
+function commonBlockers(wt, { ignoreBusy = false } = {}) {
+  const reasons = [], notes = [];
+  let forceable = true;
   const hard = (r) => { reasons.push(r); forceable = false; };
   if (wt.error) hard(wt.error.kind === 'broken-link' ? "git can't read it (broken link to its repository)" : `git can't read it: ${wt.error.message}`);
   if (wt.locked) hard('the worktree is locked');
@@ -566,6 +573,37 @@ function cleanupStatus(wt, { ignoreBusy = false } = {}) {
   if (wt.sessions.length) hard(`in use by ${wt.sessions.map((s) => s.name).join(', ')}`);
   if (openReviewItems(wt.id)) reasons.push('has unsent review comments');
   if (wt.busy && !ignoreBusy) hard('being removed right now');
+  return { reasons, notes, hard, forceable: () => forceable };
+}
+
+const dirtySummary = (wt) => (wt.dirty ? { kind: wt.dirtyKind, count: wt.dirty, files: wt.dirtyFiles.slice(0, 20) } : null);
+
+// A worktree no Claude session is using and whose PR hasn't merged. Removing it is only ever
+// manual, and its branch is always kept, so the only things at risk are uncommitted files
+// and commits on a detached HEAD.
+function idleStatus(wt, opts) {
+  const { reasons, notes, hard, forceable } = commonBlockers(wt, opts);
+  if (Date.now() - wt.lastActivity < 10 * 60_000) hard('changed in the last 10 minutes, so something may still be working in it');
+  if (wt.detached && !(wt.orphaned >= 0)) hard("couldn't check whether the commits on its detached HEAD are on a branch");
+  else if (wt.orphaned > 0) hard(`${wt.orphaned} commit${wt.orphaned === 1 ? '' : 's'} on its detached HEAD ${wt.orphaned === 1 ? "isn't" : "aren't"} on any branch; create a branch first (git switch -c <name>)`);
+  if (wt.branch) {
+    const unpushed = Math.min(wt.unpushed, wt.ahead);
+    const pushed = unpushed > 0 ? `, ${unpushed === wt.ahead ? (wt.ahead === 1 ? 'not pushed' : 'none of them pushed') : `${unpushed} not pushed`}` : wt.unpushed === 0 ? ', all pushed' : '';
+    notes.push(`the branch ${wt.branch} is kept${wt.ahead ? ` with its ${wt.ahead} commit${wt.ahead === 1 ? '' : 's'}${pushed}` : ''}`);
+  } else if (wt.orphaned === 0) notes.push('detached HEAD; its commit is on a branch, so nothing is lost');
+  if (wt.pr?.state === 'OPEN') notes.push(`PR #${wt.pr.number} is still open; removing the worktree doesn't affect it`);
+  return {
+    kind: 'idle', eligible: reasons.length === 0, reasons, notes, branchSafe: false,
+    forceable: reasons.length > 0 && forceable(), dirty: dirtySummary(wt), unmatched: [], auto: false,
+  };
+}
+
+function mergedStatus(wt, opts) {
+  const pr = wt.pr;
+  // Removing the worktree only risks uncommitted work; commits live on the branch, which
+  // is only deleted when everything on it is in the merged PR.
+  // reasons block removal; notes don't, but are worth knowing.
+  const { reasons, notes, forceable } = commonBlockers(wt, opts);
   const branchSafe = !!wt.head && (wt.head === pr.headRefOid || wt.headInMerged === true);
   if (!branchSafe) {
     notes.push(wt.headInMerged === null ? 'still checking whether its commits are in the PR; the branch is kept until that is known'
@@ -574,10 +612,10 @@ function cleanupStatus(wt, { ignoreBusy = false } = {}) {
         : "the branch is kept: its commits couldn't be matched to the merged PR");
   }
   return {
-    eligible: reasons.length === 0,
+    kind: 'merged', eligible: reasons.length === 0,
     reasons, notes, branchSafe,
-    forceable: reasons.length > 0 && forceable,
-    dirty: wt.dirty ? { kind: wt.dirtyKind, count: wt.dirty, files: wt.dirtyFiles.slice(0, 20) } : null,
+    forceable: reasons.length > 0 && forceable(),
+    dirty: dirtySummary(wt),
     unmatched: branchSafe ? [] : (wt.unmatched || []).slice(0, 12),
     auto: config.autoCleanup && Date.parse(pr.mergedAt) >= state.installedAt,
   };
@@ -618,7 +656,7 @@ async function runCleanup() {
       changed();
     }
     const cs = cleanupStatus(wt);
-    if (cs?.eligible && cs.auto && !wt.busy) {
+    if (cs?.kind === 'merged' && cs.eligible && cs.auto && !wt.busy) {
       try { await removeWorktree(wt, 'auto'); } catch (e) { log('auto-cleanup skipped', wt.path, e.message); }
     }
   }
@@ -635,7 +673,7 @@ async function removeWorktree(wt, how, { force = false } = {}) {
     changed();
   }
   const cs = cleanupStatus(wt, { ignoreBusy: true });
-  if (!cs) throw new Error('This worktree has no merged PR.');
+  if (!cs) throw new Error("The repository's main checkout can't be removed.");
   if (!cs.eligible && !(force && cs.forceable)) throw new Error(`Not safe to remove: ${cs.reasons.join('; ')}.`);
   // git refuses a dirty worktree without --force; only pass it when nothing unique can be lost or you asked for it.
   const forceGit = force || wt.dirtyKind === 'deleted-only';
@@ -648,7 +686,8 @@ async function removeWorktree(wt, how, { force = false } = {}) {
   }
   let branchDeleted = false;
   let branchKept = null;
-  if (force) branchKept = 'kept because the worktree was removed with uncommitted changes';
+  if (cs.kind === 'idle') branchKept = wt.branch ? 'kept: it isn\'t merged' : null;
+  else if (force) branchKept = 'kept because the worktree was removed with uncommitted changes';
   else if (!cs.branchSafe) branchKept = cs.notes.find((n) => n.startsWith('the branch is kept')) || 'kept: not all of its commits are in the merged PR';
   else {
     try {
@@ -660,13 +699,13 @@ async function removeWorktree(wt, how, { force = false } = {}) {
   await git(repo.root, ['worktree', 'prune']).catch(() => {});
   state.cleaned.unshift({
     path: wt.path, branch: wt.branch, sha: wt.head, repoRoot: repo.root, how: force ? 'forced' : how, branchDeleted, branchKept, at: Date.now(),
-    lostFiles: force ? wt.dirtyFiles.map((f) => f.file) : undefined,
-    pr: { number: wt.pr.number, url: wt.pr.url, title: wt.pr.title },
+    lostFiles: force ? wt.dirtyFiles.map((f) => f.file) : undefined, reason: cs.kind,
+    pr: wt.pr ? { number: wt.pr.number, url: wt.pr.url, title: wt.pr.title, state: wt.pr.state } : null,
   });
   state.cleaned = state.cleaned.slice(0, 100);
   delete state.worktrees[wt.id];
   wts.delete(wt.id);
-  log(`removed worktree ${wt.path} (${how}, PR #${wt.pr.number} merged)`);
+  log(`removed worktree ${wt.path} (${how}, ${cs.kind === 'merged' ? `PR #${wt.pr.number} merged` : 'no session using it'})`);
   save();
   changed();
 }
@@ -1372,9 +1411,19 @@ const routes = [
     return { ok: true };
   }],
   ['POST', /^\/api\/cleanup\/safe$/, () => {
-    const items = [...wts.values()].filter((wt) => !wt.busy && cleanupStatus(wt)?.eligible);
+    const items = [...wts.values()].filter((wt) => {
+      const cs = !wt.busy && cleanupStatus(wt);
+      return cs && cs.kind === 'merged' && cs.eligible;
+    });
     if (!items.length) throw httpError(409, 'Nothing is safe to remove right now.');
     return startJob('cleanup', `Removing ${items.length} merged worktree${items.length === 1 ? '' : 's'}`, items, (wt) => removeWorktree(wt, 'manual'));
+  }],
+  // Remove the worktrees you picked on the clean-up page. Each is checked again just before removal.
+  ['POST', /^\/api\/cleanup$/, (m, body) => {
+    const ids = Array.isArray(body.ids) ? body.ids : [];
+    const items = ids.map((id) => wts.get(id)).filter((wt) => wt && !wt.busy && cleanupStatus(wt)?.eligible);
+    if (!items.length) throw httpError(409, 'None of those can be removed right now.');
+    return startJob('cleanup', `Removing ${items.length} worktree${items.length === 1 ? '' : 's'}`, items, (wt) => removeWorktree(wt, 'manual'));
   }],
   ['POST', /^\/api\/worktrees\/(\w+)\/repair$/, async (m) => repairWorktrees([getWt(m[1])])],
   ['POST', /^\/api\/repair$/, async () => repairWorktrees([...wts.values()].filter((w) => w.error?.kind === 'broken-link'))],
