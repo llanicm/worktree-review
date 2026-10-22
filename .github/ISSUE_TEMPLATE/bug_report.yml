@@ -1,0 +1,36 @@
+name: Bug report
+description: Something isn't working the way it should.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead. Screenshots help.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. ...
+        2. ...
+  - type: input
+    id: version
+    attributes:
+      label: Worktree Review version
+      description: Shown under the name in the dashboard's sidebar, e.g. v2.0.4.
+    validations:
+      required: true
+  - type: input
+    id: env
+    attributes:
+      label: OS, Node and git versions
+      placeholder: macOS 15.4, Node 22.18, git 2.47
+  - type: textarea
+    id: log
+    attributes:
+      label: Server log
+      description: Relevant lines from ~/.claude/worktree-review/server.log. Check it for anything private first.
+      render: text
