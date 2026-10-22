@@ -26,6 +26,8 @@ function loadState(): State {
     coderabbit: isRecord(o.coderabbit) ? (o.coderabbit as State['coderabbit']) : {},
   };
   if (typeof o.onboardedAt === 'number' || o.onboardedAt === null) state.onboardedAt = o.onboardedAt;
+  // Installed before there was a welcome step, and already used: don't send them through it now.
+  else if (state.comments.length || state.cleaned.length || Object.values(state.worktrees).some((w) => w.reviewedAt)) state.onboardedAt = Date.now();
   return state;
 }
 

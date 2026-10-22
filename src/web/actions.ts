@@ -10,7 +10,7 @@ import { loadView, reloadComments } from './loading.ts';
 import { closePicker, openPicker } from './picker.ts';
 import { closeResult, showResult } from './result.ts';
 import { loadIntegrations, saveConfig } from './setup.ts';
-import { grouped, renderSidebar } from './sidebar.ts';
+import { defaultWorktree, renderSidebar } from './sidebar.ts';
 import { api, curWt, errMsg, need, S, st, view } from './state.ts';
 import { copy, expandHome, fnv, toast } from './util.ts';
 import { renderMain } from './view.ts';
@@ -294,7 +294,7 @@ export const actions: Record<string, Action> = {
   'rerun-setup': async () => { await api('POST', '/api/onboarding', { done: false }); location.hash = '#/welcome'; },
   'finish-setup': async () => {
     await api('POST', '/api/onboarding', { done: true });
-    const first = grouped(st().worktrees).working[0] || st().worktrees[0];
+    const first = defaultWorktree(st().worktrees);
     location.hash = first ? `#/${first.id}` : '#/';
   },
   'copy-restore': (el) => {

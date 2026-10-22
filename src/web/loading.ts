@@ -6,7 +6,7 @@ import { blameKey } from './file.ts';
 import { parseDiff } from './diff.ts';
 import { headerHtml } from './header.ts';
 import { loadIntegrations, setupSig } from './setup.ts';
-import { renderSidebar } from './sidebar.ts';
+import { defaultWorktree, renderSidebar } from './sidebar.ts';
 import { api, curWt, errMsg, need, S } from './state.ts';
 import type { CommitGroup, View, ViewFile } from './types.ts';
 import { esc } from './util.ts';
@@ -98,6 +98,10 @@ export function onHash() {
     return;
   }
   S.page = null;
+  // Opening a worktree means setup is done, even without pressing Start reviewing.
+  if (id && S.st && !S.st.onboardedAt) api('POST', '/api/onboarding', { done: true }).catch(() => {});
+  const fallback = !id && S.st?.onboardedAt ? defaultWorktree(S.st.worktrees) : undefined;
+  if (fallback) { location.replace(`#/${fallback.id}`); return; }
   if (id) select(id); else { S.selId = null; renderSidebar(); renderMain(); }
 }
 

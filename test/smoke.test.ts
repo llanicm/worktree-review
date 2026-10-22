@@ -299,6 +299,10 @@ test('the page renders a worktree without errors', { skip: !fs.existsSync(proces
       await page.eval(`location.hash = '${hash}'`);
       assert.ok(await page.waitFor("document.querySelector('#main h1')?.textContent"), hash);
     }
+    // Opening the dashboard with no worktree chosen goes straight to one to review, not to setup.
+    await page.eval(`location.href = '${BASE}/'`);
+    assert.match(await page.waitFor<string>("/^#\\/[0-9a-f]{12}$/.test(location.hash) && location.hash"), /^#\/[0-9a-f]{12}$/);
+    assert.ok(await page.waitFor("document.querySelectorAll('tr.line').length"), 'the diff of that worktree is shown');
     assert.deepEqual(page.errors, []);
   } finally {
     await page.close();

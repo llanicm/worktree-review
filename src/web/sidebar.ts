@@ -6,6 +6,12 @@ import { ago, esc, md, shortPath } from './util.ts';
 
 export type Groups = Record<'working' | 'merged' | 'recent' | 'older', Worktree[]>;
 
+/** The worktree to open when none is chosen: the one most likely to need a review now. */
+export function defaultWorktree(list: Worktree[]): Worktree | undefined {
+  const g = grouped(list);
+  return [...g.working, ...g.recent].find((w) => w.review.needsReview) ?? g.working[0] ?? g.recent[0] ?? list.find((w) => !w.isMain) ?? list[0];
+}
+
 export function grouped(list: Worktree[]): Groups {
   const recentMs = st().config.recentDays * 864e5;
   const g: Groups = { working: [], merged: [], recent: [], older: [] };

@@ -195,6 +195,7 @@ function loadState() {
     coderabbit: isRecord(o.coderabbit) ? o.coderabbit : {}
   };
   if (typeof o.onboardedAt === "number" || o.onboardedAt === null) state2.onboardedAt = o.onboardedAt;
+  else if (state2.comments.length || state2.cleaned.length || Object.values(state2.worktrees).some((w) => w.reviewedAt)) state2.onboardedAt = Date.now();
   return state2;
 }
 var state = loadState();

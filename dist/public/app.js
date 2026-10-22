@@ -627,6 +627,10 @@ function renderJobs() {
 }
 
 // src/web/sidebar.ts
+function defaultWorktree(list) {
+  const g = grouped(list);
+  return [...g.working, ...g.recent].find((w) => w.review.needsReview) ?? g.working[0] ?? g.recent[0] ?? list.find((w) => !w.isMain) ?? list[0];
+}
 function grouped(list) {
   const recentMs = st().config.recentDays * 864e5;
   const g = { working: [], merged: [], recent: [], older: [] };
@@ -1381,6 +1385,13 @@ function onHash() {
     return;
   }
   S.page = null;
+  if (id && S.st && !S.st.onboardedAt) api("POST", "/api/onboarding", { done: true }).catch(() => {
+  });
+  const fallback = !id && S.st?.onboardedAt ? defaultWorktree(S.st.worktrees) : void 0;
+  if (fallback) {
+    location.replace(`#/${fallback.id}`);
+    return;
+  }
   if (id) select(id);
   else {
     S.selId = null;
@@ -1902,7 +1913,7 @@ Their folders are deleted. ${merged ? `${merged} merged branch${merged === 1 ? "
   },
   "finish-setup": async () => {
     await api("POST", "/api/onboarding", { done: true });
-    const first = grouped(st().worktrees).working[0] || st().worktrees[0];
+    const first = defaultWorktree(st().worktrees);
     location.hash = first ? `#/${first.id}` : "#/";
   },
   "copy-restore": (el) => {
