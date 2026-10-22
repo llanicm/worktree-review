@@ -18,12 +18,16 @@ export interface Page {
 
 export async function openPage(url: string, { width = 1440, height = 900, scale = 1 } = {}): Promise<Page> {
   const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'wtr-chrome-'));
-  const port = 9300 + (process.pid % 500);
-  const chrome = spawn(CHROME, ['--headless=new', '--disable-gpu', '--hide-scrollbars', ...(process.env.CI ? ['--no-sandbox'] : []), `--user-data-dir=${profile}`, `--remote-debugging-port=${port}`, 'about:blank'], { stdio: 'ignore' });
+  // Port 0 lets Chrome pick a free port, which it writes to DevToolsActivePort in the profile. A cold start
+  // on a CI machine can take a while, so allow 30 seconds.
+  const chrome = spawn(CHROME, ['--headless=new', '--disable-gpu', '--hide-scrollbars', ...(process.env.CI ? ['--no-sandbox', '--disable-dev-shm-usage'] : []), `--user-data-dir=${profile}`, '--remote-debugging-port=0', 'about:blank'], { stdio: 'ignore' });
   let target: { webSocketDebuggerUrl: string } | undefined;
-  for (let i = 0; i < 50 && !target; i++) {
+  for (let i = 0; i < 150 && !target; i++) {
     await sleep(200);
-    try { target = ((await (await fetch(`http://127.0.0.1:${port}/json`)).json()) as any[]).find((t) => t.type === 'page'); } catch {}
+    try {
+      const port = fs.readFileSync(path.join(profile, 'DevToolsActivePort'), 'utf8').split('\n')[0];
+      target = ((await (await fetch(`http://127.0.0.1:${port}/json`)).json()) as any[]).find((t) => t.type === 'page');
+    } catch {}
   }
   if (!target) { chrome.kill('SIGKILL'); throw new Error(`Chrome didn't start (${CHROME})`); }
   const ws = new WebSocket(target.webSocketDebuggerUrl);
