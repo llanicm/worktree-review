@@ -291,14 +291,14 @@ function crPanelHtml(wt) {
 }
 function indexFindings() {
   const v = view();
-  const byAnchor = /* @__PURE__ */ new Map();
-  v.crByAnchor = byAnchor;
+  const byAnchor2 = /* @__PURE__ */ new Map();
+  v.crByAnchor = byAnchor2;
   for (const f of v.cr?.findings || []) {
     if (f.status !== "open" || !f.file) continue;
     const k = keyOf(f.file, "new", f.endLine || f.startLine);
-    const here = byAnchor.get(k);
+    const here = byAnchor2.get(k);
     if (here) here.push(f);
-    else byAnchor.set(k, [f]);
+    else byAnchor2.set(k, [f]);
   }
 }
 async function loadCodeRabbit() {
@@ -394,7 +394,7 @@ function placedCommentIds(v) {
   }
   return placed;
 }
-function renderFile(f, byAnchor) {
+function renderFile(f, byAnchor2) {
   const v = view();
   const kind = bodyKind(f);
   const collapsed = kind === "collapsed";
@@ -427,29 +427,9 @@ function renderFile(f, byAnchor) {
   else if (kind === "binary") body = '<div class="file-note">Binary file</div>';
   else if (kind === "empty") body = `<div class="file-note">${f.status === "renamed" ? "Renamed without changes" : "No content changes (mode change or empty file)"}</div>`;
   else if (kind === "large") body = `<div class="file-note">Large diff (${f.lineCount} lines). <button class="link-btn" data-act="force-render" data-file="${esc(f.uid)}">Load it</button></div>`;
-  else {
-    const rows = [];
-    for (const h of f.hunks) {
-      rows.push(`<tr class="hunk"><td colspan="3">${esc(h.header)}</td></tr>`);
-      for (const l of h.lines) {
-        const side = l.t === "del" ? "old" : "new";
-        const line = l.t === "del" ? l.o : l.n;
-        const k = keyOf(f.path, side, line, f.commit);
-        const sign = l.t === "add" ? "+" : l.t === "del" ? "−" : " ";
-        const cn = !f.commit && l.t === "add" ? commitOfLine(f.path, l.n) : void 0;
-        const cAttr = cn !== void 0 ? ` data-c="${cn}"` : "";
-        const cBar = cn !== void 0 ? `<span class="cbar ${commitClass(cn)}" title="${esc(cn ? `#${cn} ${commitByN(cn)?.sha.slice(0, 8)} ${commitByN(cn)?.subject || ""}` : "Not committed yet")}"></span>` : "";
-        rows.push(`<tr class="line ${l.t}" data-k="${esc(k)}"${cAttr}><td class="num" data-act="new-comment" data-k="${esc(k)}">${l.o ?? ""}</td><td class="num" data-act="new-comment" data-k="${esc(k)}">${l.n ?? ""}</td><td class="code">${cBar}<button class="add-c" data-act="new-comment" data-k="${esc(k)}" title="Comment on this line">+</button><span class="sign">${sign}</span>${hl(l.text, lang)}</td></tr>`);
-        const crHere = side === "new" ? v.crByAnchor?.get(k) || [] : [];
-        const threads = byAnchor.get(k) || [];
-        const ek = `new:${k}`;
-        if (threads.length || crHere.length || S.editors.has(ek)) {
-          rows.push(`<tr class="thread-row"><td colspan="3"><div class="threads">${crHere.map((f2) => findingHtml(f2, true)).join("")}${threads.map(threadHtml).join("")}${S.editors.has(ek) ? editorHtml(ek, "Add comment") : ""}</div></td></tr>`);
-        }
-      }
-    }
-    body = `<table class="diff"><colgroup><col class="num"><col class="num"><col></colgroup>${rows.join("")}</table>`;
-  }
+  else if (lazyPlaceholder(f, mine.length + fileFindings.length > 0 || [...S.editors.keys()].some((k) => k.startsWith(`new:${f.commit ? `${f.commit}~` : ""}${f.path}|`)))) {
+    body = lazyPlaceholderHtml(f);
+  } else body = rowsHtml(f, byAnchor2);
   const snippet = (line, text) => `<div class="outside-line"><span class="outside-no">${line ?? ""}</span><code>${text ? hl(text, lang) : '<span class="muted">(line not available)</span>'}</code></div>`;
   const outsideItems = [
     ...outsideFindings.map((x) => ({ line: x.startLine, html: snippet(x.startLine, x.snippet) + findingHtml(x, true) })),
@@ -457,6 +437,113 @@ function renderFile(f, byAnchor) {
   ].sort((a, b) => (a.line || 0) - (b.line || 0));
   const out = outsideItems.length && !collapsed ? `<div class="outdated"><div class="outdated-label">Not on a changed line, so shown here</div><div class="threads">${outsideItems.map((i) => i.html).join("")}</div></div>` : "";
   return `<section class="file ${collapsed ? "collapsed" : ""}" id="f-${fnv(f.uid)}">${head}<div class="file-body">${out}${body}</div></section>`;
+}
+function rowsHtml(f, byAnchor2) {
+  const v = view();
+  const lang = langFor(f.path);
+  const rows = [];
+  for (const h of f.hunks) {
+    rows.push(`<tr class="hunk"><td colspan="3">${esc(h.header)}</td></tr>`);
+    for (const l of h.lines) {
+      const side = l.t === "del" ? "old" : "new";
+      const line = l.t === "del" ? l.o : l.n;
+      const k = keyOf(f.path, side, line, f.commit);
+      const sign = l.t === "add" ? "+" : l.t === "del" ? "−" : " ";
+      const cn = !f.commit && l.t === "add" ? commitOfLine(f.path, l.n) : void 0;
+      const cAttr = cn !== void 0 ? ` data-c="${cn}"` : "";
+      const cBar = cn !== void 0 ? cbarHtml(cn) : "";
+      rows.push(`<tr class="line ${l.t}" data-k="${esc(k)}"${cAttr}><td class="num" data-act="new-comment" data-k="${esc(k)}">${l.o ?? ""}</td><td class="num" data-act="new-comment" data-k="${esc(k)}">${l.n ?? ""}</td><td class="code">${cBar}<button class="add-c" data-act="new-comment" data-k="${esc(k)}" title="Comment on this line">+</button><span class="sign">${sign}</span>${hl(l.text, lang)}</td></tr>`);
+      const crHere = side === "new" ? v.crByAnchor?.get(k) || [] : [];
+      const threads = byAnchor2.get(k) || [];
+      const ek = `new:${k}`;
+      if (threads.length || crHere.length || S.editors.has(ek)) {
+        rows.push(`<tr class="thread-row"><td colspan="3"><div class="threads">${crHere.map((f2) => findingHtml(f2, true)).join("")}${threads.map(threadHtml).join("")}${S.editors.has(ek) ? editorHtml(ek, "Add comment") : ""}</div></td></tr>`);
+      }
+    }
+  }
+  return `<table class="diff"><colgroup><col class="num"><col class="num"><col></colgroup>${rows.join("")}</table>`;
+}
+function cbarHtml(cn) {
+  return `<span class="cbar ${commitClass(cn)}" title="${esc(cn ? `#${cn} ${commitByN(cn)?.sha.slice(0, 8)} ${commitByN(cn)?.subject || ""}` : "Not committed yet")}"></span>`;
+}
+
+// src/web/lazy.ts
+var FIRST_LINES = 600;
+var NEAR_PX = 1500;
+var ROW_PX = 20;
+var HUNK_PX = 28;
+var CHAR_PX = 7.2;
+var render = null;
+var byAnchor = /* @__PURE__ */ new Map();
+function beginRender(main, anchors) {
+  byAnchor = anchors;
+  const near = /* @__PURE__ */ new Set();
+  const box = main.getBoundingClientRect();
+  for (const el of main.querySelectorAll("section.file")) {
+    const r = el.getBoundingClientRect();
+    if (r.bottom > box.top - NEAR_PX && r.top < box.bottom + NEAR_PX) near.add(el.id);
+  }
+  const cols = Math.max(40, Math.floor((box.width - 48 - 2 * 52 - 22) / CHAR_PX));
+  render = { budget: near.size ? 0 : FIRST_LINES, near, cols };
+}
+function endRender(main) {
+  render = null;
+  watch(main);
+}
+function lazyPlaceholder(f, hasThreads) {
+  if (!render || hasThreads || render.near.has(`f-${fnv(f.uid)}`)) return false;
+  if (render.budget > 0) {
+    render.budget -= f.lineCount;
+    return false;
+  }
+  return true;
+}
+function lazyPlaceholderHtml(f) {
+  const cols = render?.cols ?? 120;
+  let h = 0;
+  for (const hunk of f.hunks) {
+    h += HUNK_PX;
+    for (const l of hunk.lines) h += ROW_PX * Math.max(1, Math.ceil(l.text.length / cols));
+  }
+  return `<div class="lazy-rows" data-lazy="${esc(f.uid)}" style="height:${h}px"></div>`;
+}
+var io = null;
+var idleTimer = null;
+function fileByUid(uid) {
+  const v = S.view;
+  if (!v) return void 0;
+  return v.files.find((f) => f.uid === uid) ?? v.groups?.flatMap((g) => g.files).find((f) => f.uid === uid);
+}
+function fill(el) {
+  const uid = el.getAttribute("data-lazy");
+  const f = uid === null ? void 0 : fileByUid(uid);
+  io?.unobserve(el);
+  if (!f || !el.isConnected) return;
+  el.outerHTML = rowsHtml(f, byAnchor);
+}
+function watch(main) {
+  io?.disconnect();
+  if (idleTimer !== null) clearTimeout(idleTimer);
+  const pending = main.querySelectorAll("[data-lazy]");
+  if (!pending.length) return;
+  io = new IntersectionObserver((entries) => {
+    for (const e of entries) if (e.isIntersecting) fill(e.target);
+  }, { root: main, rootMargin: `${NEAR_PX}px 0px` });
+  for (const el of pending) io.observe(el);
+  const slice = () => {
+    const end = performance.now() + 8;
+    let el = main.querySelector("[data-lazy]");
+    while (el && performance.now() < end) {
+      fill(el);
+      el = main.querySelector("[data-lazy]");
+    }
+    idleTimer = el ? window.setTimeout(slice, 30) : null;
+  };
+  idleTimer = window.setTimeout(slice, 600);
+}
+function fillFile(uid) {
+  const el = document.querySelector(`[data-lazy="${CSS.escape(uid)}"]`);
+  if (el) fill(el);
 }
 
 // src/web/jobs.ts
@@ -839,7 +926,8 @@ function renderMain() {
     return;
   }
   const v = S.view;
-  const byAnchor = commentsByAnchor(v.comments);
+  const byAnchor2 = commentsByAnchor(v.comments);
+  beginRender(main, byAnchor2);
   const mode = v.diff.mode;
   const since = mode === "since";
   const byCommit = mode === "commits";
@@ -847,9 +935,9 @@ function renderMain() {
   const hiddenCommits = v.diff.mode === "commits" ? v.diff.hiddenCommits : 0;
   let filesHtml;
   if (byCommit) {
-    filesHtml = groups.map((g) => groupHtml(g, byAnchor)).join("") + (hiddenCommits ? `<div class="callout small">${hiddenCommits} older commits aren't shown.</div>` : "");
+    filesHtml = groups.map((g) => groupHtml(g, byAnchor2)).join("") + (hiddenCommits ? `<div class="callout small">${hiddenCommits} older commits aren't shown.</div>` : "");
   } else {
-    filesHtml = v.files.map((f) => renderFile(f, byAnchor)).join("");
+    filesHtml = v.files.map((f) => renderFile(f, byAnchor2)).join("");
   }
   const { orphan, otherView } = unplacedComments(v);
   const orphanPanel = orphanHtml(orphan);
@@ -884,6 +972,7 @@ function renderMain() {
   </div>
   ${reviewBarHtml(wt)}`;
   main.scrollTop = scroll;
+  endRender(main);
   applyHighlight();
   if (S.scrollTo) {
     document.getElementById(S.scrollTo)?.scrollIntoView({ block: "start" });
@@ -899,16 +988,16 @@ function renderMain() {
   }
 }
 var commentsByAnchor = (comments) => {
-  const byAnchor = /* @__PURE__ */ new Map();
+  const byAnchor2 = /* @__PURE__ */ new Map();
   for (const c of comments) {
     const k = keyOf(c.file, c.side, c.line, c.commit);
-    const here = byAnchor.get(k);
+    const here = byAnchor2.get(k);
     if (here) here.push(c);
-    else byAnchor.set(k, [c]);
+    else byAnchor2.set(k, [c]);
   }
-  return byAnchor;
+  return byAnchor2;
 };
-function groupHtml(g, byAnchor) {
+function groupHtml(g, byAnchor2) {
   const shut = S.shutCommits.has(g.n);
   return `<section class="commit-group ${commitClass(g.n)} ${shut ? "shut" : ""}" id="cg-${g.n}">
       <div class="commit-head"><button class="caret" data-act="toggle-commit" data-n="${g.n}" aria-expanded="${!shut}" aria-label="${shut ? "Expand" : "Collapse"} this commit" title="${shut ? "Expand" : "Collapse"} this commit">${shut ? "▸" : "▾"}</button><span class="cnum">${g.n ? `#${g.n}` : "±"}</span>
@@ -916,7 +1005,7 @@ function groupHtml(g, byAnchor) {
         <span class="muted small">${g.sha ? `<span class="mono">${g.sha.slice(0, 8)}</span> · ${esc(g.author)} · ${ago(g.time)} · ` : ""}${g.files.length} file${g.files.length === 1 ? "" : "s"}</span></div>
       ${shut || !g.body ? "" : commitBodyHtml(g.body, g.n)}
       ${shut ? "" : `<div class="commit-files">${g.truncated ? '<div class="callout warn small">This commit is too large to show in full.</div>' : ""}
-      ${g.files.map((f) => renderFile(f, byAnchor)).join("") || '<div class="file-note">No file changes.</div>'}</div>`}
+      ${g.files.map((f) => renderFile(f, byAnchor2)).join("") || '<div class="file-note">No file changes.</div>'}</div>`}
     </section>`;
 }
 function unplacedComments(v) {
@@ -1013,6 +1102,28 @@ function reviewBarHtml(wt) {
     </div>
   </details>`;
 }
+function applyBlame() {
+  const page = need("#main").querySelector(":scope > .page");
+  if (!S.view?.headerSig) return;
+  if (!page || S.view.diff.mode === "commits") {
+    renderMain();
+    return;
+  }
+  for (const row of page.querySelectorAll("section.file tr.line.add:not([data-c])")) {
+    const k = row.dataset.k;
+    if (!k) continue;
+    const { commit, file, line } = parseKey(k);
+    if (commit) continue;
+    const cn = commitOfLine(file, line);
+    if (cn === void 0) continue;
+    row.dataset.c = String(cn);
+    row.querySelector("td.code")?.insertAdjacentHTML("afterbegin", cbarHtml(cn));
+  }
+  for (const b of page.querySelectorAll(".commits-panel .cswatch[disabled]")) {
+    b.disabled = false;
+    b.title = "Highlight the lines from this commit";
+  }
+}
 
 // src/web/collapse.ts
 function replaceWith(el, html) {
@@ -1077,30 +1188,30 @@ function patch(fn) {
 }
 var fileEl = (f) => document.getElementById(`f-${fnv(f.uid)}`);
 var groupEl = (n) => document.getElementById(`cg-${n}`);
-function patchFiles(files, byAnchor) {
+function patchFiles(files, byAnchor2) {
   for (const f of files) {
     const el = fileEl(f);
     if (!el) return false;
-    replaceWith(el, renderFile(f, byAnchor));
+    replaceWith(el, renderFile(f, byAnchor2));
   }
   return true;
 }
-function patchGroups(groups, byAnchor) {
+function patchGroups(groups, byAnchor2) {
   for (const g of groups) {
     const el = groupEl(g.n);
     if (!el) return false;
-    replaceWith(el, groupHtml(g, byAnchor));
+    replaceWith(el, groupHtml(g, byAnchor2));
   }
   return true;
 }
 function toggleFile(f) {
   S.toggled.set(f.uid, !isCollapsed(f));
-  patch((_page, _v, byAnchor) => patchFiles([f], byAnchor));
+  patch((_page, _v, byAnchor2) => patchFiles([f], byAnchor2));
 }
 function toggleCommit(n) {
   if (S.shutCommits.has(n)) S.shutCommits.delete(n);
   else S.shutCommits.add(n);
-  patch((_page, v, byAnchor) => patchGroups((v.groups ?? []).filter((g) => g.n === n), byAnchor));
+  patch((_page, v, byAnchor2) => patchGroups((v.groups ?? []).filter((g) => g.n === n), byAnchor2));
 }
 function toggleBody(n) {
   if (S.openBodies.has(n)) S.openBodies.delete(n);
@@ -1117,17 +1228,17 @@ function collapseAll(v) {
   if (v.diff.mode === "commits") {
     const groups = (v.groups ?? []).filter((g) => !S.shutCommits.has(g.n));
     for (const g of groups) S.shutCommits.add(g.n);
-    patch((_page, _v, byAnchor) => patchGroups(groups, byAnchor));
+    patch((_page, _v, byAnchor2) => patchGroups(groups, byAnchor2));
   } else {
     const files = v.files.filter((f) => !isCollapsed(f));
     for (const f of v.files) S.toggled.set(f.uid, true);
-    patch((_page, _v, byAnchor) => patchFiles(files, byAnchor));
+    patch((_page, _v, byAnchor2) => patchFiles(files, byAnchor2));
   }
 }
 function expandAll(v) {
   const groups = (v.groups ?? []).filter((g) => S.shutCommits.has(g.n));
   S.shutCommits.clear();
-  patch((_page, _v, byAnchor) => patchGroups(groups, byAnchor));
+  patch((_page, _v, byAnchor2) => patchGroups(groups, byAnchor2));
 }
 
 // src/web/loading.ts
@@ -1167,7 +1278,7 @@ async function loadView({ quiet = false } = {}) {
       api("GET", `/api/worktrees/${wt.id}/blame`).then((b) => {
         if (seq !== S.seq || !S.view || b.fingerprint !== S.view.diff.fingerprint) return;
         S.view.blame = b;
-        renderMain();
+        applyBlame();
       }, () => {
       });
     }
@@ -1647,6 +1758,7 @@ Their folders are deleted. ${merged ? `${merged} merged branch${merged === 1 ? "
       S.toggled.set(f.uid, false);
       renderMain();
     }
+    fillFile(f.path);
     const row = document.querySelector(`tr.line[data-k="${CSS.escape(keyOf(f.path, "new", el.dataset.line))}"]`);
     (row || document.getElementById(`f-${fnv(f.path)}`))?.scrollIntoView({ block: "center" });
   },

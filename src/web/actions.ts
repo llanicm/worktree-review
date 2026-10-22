@@ -1,5 +1,6 @@
 // ---------- actions (data-act event delegation) ----------
 import type { CodeRabbitReview, Integrations, RepairResult } from '../shared/api.ts';
+import { fillFile } from './lazy.ts';
 import { indexFindings, loadCodeRabbit } from './coderabbit.ts';
 import { collapseAll, expandAll, toggleBody, toggleCommit, toggleFile } from './collapse.ts';
 import { cleanPicked, cleanupGroups } from './cleanup.ts';
@@ -234,6 +235,7 @@ export const actions: Record<string, Action> = {
     const f = view().files.find((x) => x.path === attr(el, 'file') && !x.commit);
     if (!f) { toast('That file isn\'t in this diff view'); return; }
     if (isCollapsed(f)) { S.toggled.set(f.uid, false); renderMain(); }
+    fillFile(f.path);
     const row = document.querySelector(`tr.line[data-k="${CSS.escape(keyOf(f.path, 'new', el.dataset.line))}"]`);
     (row || document.getElementById(`f-${fnv(f.path)}`))?.scrollIntoView({ block: 'center' });
   },

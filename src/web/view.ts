@@ -2,9 +2,10 @@
 import type { Comment, Commit, Worktree } from '../shared/api.ts';
 import { crButtonHtml, crPanelHtml } from './coderabbit.ts';
 import { cleanupPageHtml } from './cleanup.ts';
-import { keyOf } from './diff.ts';
-import { commitClass, placedCommentIds, renderFile, threadHtml } from './file.ts';
+import { keyOf, parseKey } from './diff.ts';
+import { cbarHtml, commitClass, commitOfLine, placedCommentIds, renderFile, threadHtml } from './file.ts';
 import { headerHtml } from './header.ts';
+import { beginRender, endRender } from './lazy.ts';
 import { setupHtml } from './setup.ts';
 import { curWt, need, S, st, view } from './state.ts';
 import type { CommitGroup, View } from './types.ts';
@@ -28,6 +29,7 @@ export function renderMain() {
   if (!S.view || S.view.wtId !== wt.id) { main.innerHTML = `<div class="page">${headerHtml(wt)}<div class="file-note">Loading diff…</div></div>`; return; }
   const v = S.view;
   const byAnchor = commentsByAnchor(v.comments);
+  beginRender(main, byAnchor);
   const mode = v.diff.mode;
   const since = mode === 'since';
   const byCommit = mode === 'commits';
@@ -73,6 +75,7 @@ export function renderMain() {
   </div>
   ${reviewBarHtml(wt)}`;
   main.scrollTop = scroll;
+  endRender(main);
   applyHighlight();
   if (S.scrollTo) {
     document.getElementById(S.scrollTo)?.scrollIntoView({ block: 'start' });
@@ -210,4 +213,28 @@ function reviewBarHtml(wt: Worktree) {
       ${pending.length ? `<div class="pending-list">${pending.map((r) => `<div>Review with ${r.commentIds.length} comment${r.commentIds.length === 1 ? '' : 's'} waiting since ${ago(r.createdAt)} · <button class="link-btn" data-act="cancel-review" data-id="${r.id}">take back</button></div>`).join('')}</div>` : ''}
     </div>
   </details>`;
+}
+
+// Blame arrives after the diff is on screen: add each added line's commit bar to the rows already drawn,
+// rather than redrawing the whole diff. Rows still waiting in a placeholder (lazy.ts) get theirs when drawn.
+export function applyBlame() {
+  const page = need('#main').querySelector(':scope > .page');
+  // Not drawn yet (headerSig is set by renderMain): the coming render includes the bars.
+  if (!S.view?.headerSig) return;
+  if (!page || S.view.diff.mode === 'commits') { renderMain(); return; }
+  for (const row of page.querySelectorAll<HTMLElement>('section.file tr.line.add:not([data-c])')) {
+    const k = row.dataset.k;
+    if (!k) continue;
+    const { commit, file, line } = parseKey(k);
+    if (commit) continue;
+    const cn = commitOfLine(file, line);
+    if (cn === undefined) continue;
+    row.dataset.c = String(cn);
+    row.querySelector('td.code')?.insertAdjacentHTML('afterbegin', cbarHtml(cn));
+  }
+  // The commit swatches can highlight now.
+  for (const b of page.querySelectorAll<HTMLButtonElement>('.commits-panel .cswatch[disabled]')) {
+    b.disabled = false;
+    b.title = 'Highlight the lines from this commit';
+  }
 }

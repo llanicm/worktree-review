@@ -561,3 +561,7 @@ td.code .cbar { position: absolute; left: 0; top: 0; bottom: 0; width: 4px; back
 .clean-row .clean-main > div:first-child { display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
 .clean-row .notes { margin: 4px 0 0; padding-left: 18px; color: var(--fg-muted); font-size: 12px; }
 .clean-foot { position: sticky; bottom: 0; background: var(--bg); padding: 12px 0; margin-top: 16px; border-top: 1px solid var(--border); display: flex; gap: 12px; align-items: center; }
+.lazy-rows { background: repeating-linear-gradient(var(--bg) 0 19px, var(--bg-soft) 19px 20px); }
+
+/* Off-screen files skip layout and paint; the browser remembers each one's last size. */
+section.file { content-visibility: auto; contain-intrinsic-size: auto 400px; }

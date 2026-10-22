@@ -8,7 +8,7 @@ import { renderSidebar } from './sidebar.ts';
 import { api, curWt, errMsg, need, S } from './state.ts';
 import type { CommitGroup, View, ViewFile } from './types.ts';
 import { esc } from './util.ts';
-import { renderMain } from './view.ts';
+import { applyBlame, renderMain } from './view.ts';
 
 export async function loadView({ quiet = false } = {}) {
   const wt = curWt();
@@ -42,7 +42,7 @@ export async function loadView({ quiet = false } = {}) {
       api<BlameResponse>('GET', `/api/worktrees/${wt.id}/blame`).then((b) => {
         if (seq !== S.seq || !S.view || b.fingerprint !== S.view.diff.fingerprint) return;
         S.view.blame = b;
-        renderMain();
+        applyBlame();
       }, () => {});
     }
     await loadCodeRabbit();

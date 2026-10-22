@@ -5,12 +5,13 @@ import { hl, keyOf, langFor, sameCommit } from './diff.ts';
 import { curWt, S, view } from './state.ts';
 import type { View, ViewFile } from './types.ts';
 import { ago, editorLink, editorName, esc, fnv, md } from './util.ts';
+import { lazyPlaceholder, lazyPlaceholderHtml } from './lazy.ts';
 
 export const commitClass = (n: number) => (n === 0 ? 'cu' : `c${((n - 1) % 8) + 1}`);
 export const commitLabel = (n: number) => (n === 0 ? 'uncommitted' : `#${n}`);
 
 // Commit number (0 = uncommitted) that last touched line n of a file, from blame runs.
-function commitOfLine(file: string, n: number | undefined) {
+export function commitOfLine(file: string, n: number | undefined) {
   const b = S.view?.blame?.lines?.[file];
   if (!b) return undefined;
   for (const [a, z, c] of b) if (n !== undefined && n >= a && n <= z) return c;
@@ -141,29 +142,9 @@ export function renderFile(f: ViewFile, byAnchor: Map<string, Comment[]>) {
   else if (kind === 'binary') body = '<div class="file-note">Binary file</div>';
   else if (kind === 'empty') body = `<div class="file-note">${f.status === 'renamed' ? 'Renamed without changes' : 'No content changes (mode change or empty file)'}</div>`;
   else if (kind === 'large') body = `<div class="file-note">Large diff (${f.lineCount} lines). <button class="link-btn" data-act="force-render" data-file="${esc(f.uid)}">Load it</button></div>`;
-  else {
-    const rows: string[] = [];
-    for (const h of f.hunks) {
-      rows.push(`<tr class="hunk"><td colspan="3">${esc(h.header)}</td></tr>`);
-      for (const l of h.lines) {
-        const side = l.t === 'del' ? 'old' : 'new';
-        const line = l.t === 'del' ? l.o : l.n;
-        const k = keyOf(f.path, side, line, f.commit);
-        const sign = l.t === 'add' ? '+' : l.t === 'del' ? '−' : ' ';
-        const cn = !f.commit && l.t === 'add' ? commitOfLine(f.path, l.n) : undefined;
-        const cAttr = cn !== undefined ? ` data-c="${cn}"` : '';
-        const cBar = cn !== undefined ? `<span class="cbar ${commitClass(cn)}" title="${esc(cn ? `#${cn} ${commitByN(cn)?.sha.slice(0, 8)} ${commitByN(cn)?.subject || ''}` : 'Not committed yet')}"></span>` : '';
-        rows.push(`<tr class="line ${l.t}" data-k="${esc(k)}"${cAttr}><td class="num" data-act="new-comment" data-k="${esc(k)}">${l.o ?? ''}</td><td class="num" data-act="new-comment" data-k="${esc(k)}">${l.n ?? ''}</td><td class="code">${cBar}<button class="add-c" data-act="new-comment" data-k="${esc(k)}" title="Comment on this line">+</button><span class="sign">${sign}</span>${hl(l.text, lang)}</td></tr>`);
-        const crHere: Finding[] = side === 'new' ? (v.crByAnchor?.get(k) || []) : [];
-        const threads = (byAnchor.get(k) || []);
-        const ek = `new:${k}`;
-        if (threads.length || crHere.length || S.editors.has(ek)) {
-          rows.push(`<tr class="thread-row"><td colspan="3"><div class="threads">${crHere.map((f) => findingHtml(f, true)).join('')}${threads.map(threadHtml).join('')}${S.editors.has(ek) ? editorHtml(ek, 'Add comment') : ''}</div></td></tr>`);
-        }
-      }
-    }
-    body = `<table class="diff"><colgroup><col class="num"><col class="num"><col></colgroup>${rows.join('')}</table>`;
-  }
+  else if (lazyPlaceholder(f, mine.length + fileFindings.length > 0 || [...S.editors.keys()].some((k) => k.startsWith(`new:${f.commit ? `${f.commit}~` : ''}${f.path}|`)))) {
+    body = lazyPlaceholderHtml(f);
+  } else body = rowsHtml(f, byAnchor);
   const snippet = (line: number | null | undefined, text: string | undefined) => `<div class="outside-line"><span class="outside-no">${line ?? ''}</span><code>${text ? hl(text, lang) : '<span class="muted">(line not available)</span>'}</code></div>`;
   const outsideItems = [
     ...outsideFindings.map((x) => ({ line: x.startLine, html: snippet(x.startLine, x.snippet) + findingHtml(x, true) })),
@@ -172,4 +153,36 @@ export function renderFile(f: ViewFile, byAnchor: Map<string, Comment[]>) {
   const out = outsideItems.length && !collapsed
     ? `<div class="outdated"><div class="outdated-label">Not on a changed line, so shown here</div><div class="threads">${outsideItems.map((i) => i.html).join('')}</div></div>` : '';
   return `<section class="file ${collapsed ? 'collapsed' : ''}" id="f-${fnv(f.uid)}">${head}<div class="file-body">${out}${body}</div></section>`;
+}
+
+// The table of diff rows for one file. Separate from renderFile so a lazily drawn file (lazy.ts) can fill in later.
+export function rowsHtml(f: ViewFile, byAnchor: Map<string, Comment[]>) {
+  const v = view();
+  const lang = langFor(f.path);
+  const rows: string[] = [];
+  for (const h of f.hunks) {
+    rows.push(`<tr class="hunk"><td colspan="3">${esc(h.header)}</td></tr>`);
+    for (const l of h.lines) {
+      const side = l.t === 'del' ? 'old' : 'new';
+      const line = l.t === 'del' ? l.o : l.n;
+      const k = keyOf(f.path, side, line, f.commit);
+      const sign = l.t === 'add' ? '+' : l.t === 'del' ? '−' : ' ';
+      const cn = !f.commit && l.t === 'add' ? commitOfLine(f.path, l.n) : undefined;
+      const cAttr = cn !== undefined ? ` data-c="${cn}"` : '';
+      const cBar = cn !== undefined ? cbarHtml(cn) : '';
+      rows.push(`<tr class="line ${l.t}" data-k="${esc(k)}"${cAttr}><td class="num" data-act="new-comment" data-k="${esc(k)}">${l.o ?? ''}</td><td class="num" data-act="new-comment" data-k="${esc(k)}">${l.n ?? ''}</td><td class="code">${cBar}<button class="add-c" data-act="new-comment" data-k="${esc(k)}" title="Comment on this line">+</button><span class="sign">${sign}</span>${hl(l.text, lang)}</td></tr>`);
+      const crHere: Finding[] = side === 'new' ? (v.crByAnchor?.get(k) || []) : [];
+      const threads = (byAnchor.get(k) || []);
+      const ek = `new:${k}`;
+      if (threads.length || crHere.length || S.editors.has(ek)) {
+        rows.push(`<tr class="thread-row"><td colspan="3"><div class="threads">${crHere.map((f) => findingHtml(f, true)).join('')}${threads.map(threadHtml).join('')}${S.editors.has(ek) ? editorHtml(ek, 'Add comment') : ''}</div></td></tr>`);
+      }
+    }
+  }
+  return `<table class="diff"><colgroup><col class="num"><col class="num"><col></colgroup>${rows.join('')}</table>`;
+}
+
+/** The commit bar on an added line (blame), shared by the full render and the in-place blame patch. */
+export function cbarHtml(cn: number) {
+  return `<span class="cbar ${commitClass(cn)}" title="${esc(cn ? `#${cn} ${commitByN(cn)?.sha.slice(0, 8)} ${commitByN(cn)?.subject || ''}` : 'Not committed yet')}"></span>`;
 }
