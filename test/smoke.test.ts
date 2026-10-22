@@ -1,0 +1,287 @@
+// End-to-end check of the server against the demo (extras/demo/demo.mjs): every API route,
+// the removal rules, hook delivery, the security checks, and the page rendering in Chrome.
+// Run with: npm test  (needs Node 22.18+ to run TypeScript directly; Chrome for the page check)
+import { test, before, after } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import http from 'node:http';
+import os from 'node:os';
+import path from 'node:path';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
+import { openPage } from './cdp.ts';
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const PORT = Number(process.env.WTR_TEST_PORT || 4849);
+const BASE = `http://127.0.0.1:${PORT}`;
+const DEMO = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), 'wtr-smoke-'));
+
+type Json = any;
+async function api(method: string, p: string, body?: unknown, headers: Record<string, string> = { 'x-wtr': '1' }): Promise<{ status: number; json: Json }> {
+  const res = await fetch(BASE + p, { method, headers: { 'content-type': 'application/json', ...headers }, body: body === undefined ? undefined : JSON.stringify(body) });
+  const text = await res.text();
+  let json: Json = text;
+  try { json = JSON.parse(text); } catch {}
+  return { status: res.status, json };
+}
+const get = async (p: string) => (await api('GET', p)).json;
+const post = async (p: string, body: unknown = {}) => {
+  const r = await api('POST', p, body);
+  assert.equal(r.status, 200, `POST ${p} -> ${r.status} ${JSON.stringify(r.json)}`);
+  return r.json;
+};
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+async function until<T>(fn: () => Promise<T | undefined | null | false>, what: string, ms = 15_000): Promise<T> {
+  const end = Date.now() + ms;
+  for (;;) {
+    const v = await fn();
+    if (v) return v;
+    if (Date.now() > end) throw new Error(`Timed out waiting for ${what}`);
+    await sleep(150);
+  }
+}
+const state = () => get('/api/state');
+const wtBy = async (branch: string) => (await state()).worktrees.find((w: Json) => w.branch === branch);
+const repo = path.join(DEMO, 'home', 'code', 'shop');
+const branches = () => execFileSync('git', ['branch', '--format=%(refname:short)'], { cwd: repo, encoding: 'utf8' }).split('\n').filter(Boolean);
+
+before(async () => {
+  const r = spawnSync(process.execPath, [path.join(ROOT, 'extras', 'demo', 'demo.mjs'), DEMO], { env: { ...process.env, WTR_PORT: String(PORT) }, encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stderr);
+  await until(async () => (await state()).worktrees.find((w: Json) => w.branch === 'feat/checkout-discounts')?.coderabbit?.status === 'done', 'the demo CodeRabbit review');
+});
+
+after(async () => {
+  await api('POST', '/api/shutdown').catch(() => {});
+  for (const pid of fs.readFileSync(path.join(DEMO, 'pids'), 'utf8').split('\n').filter(Boolean)) {
+    try { process.kill(Number(pid)); } catch {}
+  }
+  await sleep(300);
+  fs.rmSync(DEMO, { recursive: true, force: true });
+});
+
+test('state lists the demo worktrees, sessions and PRs', async () => {
+  const st = await state();
+  assert.match(st.version, /^\d+\.\d+\.\d+$/);
+  assert.deepEqual(st.repos.map((r: Json) => [r.name, r.github]), [['shop', 'acme/shop']]);
+  assert.equal(st.sessions.length, 3);
+  const by = Object.fromEntries(st.worktrees.map((w: Json) => [w.branch, w]));
+  assert.deepEqual(Object.keys(by).sort(), ['chore/upgrade-node', 'feat/checkout-discounts', 'feat/search-filters', 'fix/tax-rounding', 'main', 'refactor/api-client', 'spike/graphql-gateway']);
+  assert.ok(by.main.isMain);
+  assert.deepEqual(by['feat/checkout-discounts'].sessions.map((s: Json) => s.name), ['shop-checkout']);
+  assert.deepEqual(by['feat/search-filters'].sessions.map((s: Json) => s.name), ['shop-search']);
+  assert.equal(by['feat/checkout-discounts'].ahead, 3);
+  assert.equal(by['feat/checkout-discounts'].dirty, 1);
+  assert.deepEqual(by['feat/checkout-discounts'].comments.draft, 1);
+  assert.deepEqual(by['feat/checkout-discounts'].comments.open, 1);
+  assert.equal(by['feat/checkout-discounts'].coderabbit.open, 2);
+  assert.equal(by['fix/tax-rounding'].pr.state, 'OPEN');
+  assert.equal(by['chore/upgrade-node'].pr.state, 'MERGED');
+  assert.equal(by['refactor/api-client'].dirtyKind, 'lockfile-only');
+  assert.equal(st.cleaned.length, 1);
+});
+
+test('cleanup status explains each worktree', async () => {
+  const by = Object.fromEntries((await state()).worktrees.map((w: Json) => [w.branch, w.cleanup]));
+  assert.equal(by.main, null);
+  assert.deepEqual([by['chore/upgrade-node'].kind, by['chore/upgrade-node'].eligible, by['chore/upgrade-node'].branchSafe, by['chore/upgrade-node'].auto], ['merged', true, true, false]);
+  assert.deepEqual([by['refactor/api-client'].kind, by['refactor/api-client'].eligible, by['refactor/api-client'].forceable], ['merged', false, true]);
+  assert.match(by['refactor/api-client'].reasons[0], /lockfile/);
+  assert.deepEqual([by['spike/graphql-gateway'].kind, by['spike/graphql-gateway'].eligible], ['idle', true]);
+  assert.match(by['spike/graphql-gateway'].notes[0], /kept with its 1 commit, not pushed/);
+  assert.equal(by['feat/checkout-discounts'].eligible, false);
+  assert.ok(by['feat/checkout-discounts'].reasons.some((r: string) => /in use by shop-checkout/.test(r)));
+  assert.ok(by['fix/tax-rounding'].notes.some((n: string) => /PR #42 is still open/.test(n)));
+});
+
+test('diffs: full, by commit, blame', async () => {
+  const wt = await wtBy('feat/checkout-discounts');
+  const full = await get(`/api/worktrees/${wt.id}/diff?mode=full`);
+  assert.equal(full.mode, 'full');
+  assert.equal(full.commits.length, 3);
+  assert.deepEqual(full.commits.map((c: Json) => c.subject), ['Add discount codes', 'Apply discount codes at checkout', 'Test expired and fixed-amount codes']);
+  assert.match(full.commits[1].body, /subtotal before tax/);
+  const files = [...full.diff.matchAll(/^diff --git a\/(\S+)/gm)].map((m: Json) => m[1]).sort();
+  assert.deepEqual(files, ['src/checkout.ts', 'src/discounts.ts', 'test/discounts.test.ts']);
+  assert.deepEqual(full.fileCommits['src/checkout.ts'], [2, 0]);
+  assert.equal(full.sinceAvailable, false);
+  const byCommit = await get(`/api/worktrees/${wt.id}/diff?mode=commits`);
+  assert.equal(byCommit.mode, 'commits');
+  assert.equal(byCommit.commits.length, 3);
+  assert.match(byCommit.commits[0].diff, /src\/discounts\.ts/);
+  assert.match(byCommit.uncommitted, /DiscountError/);
+  const blame = await get(`/api/worktrees/${wt.id}/blame`);
+  assert.equal(blame.fingerprint, full.fingerprint);
+  assert.ok(blame.lines['src/discounts.ts']);
+  // Runs of [firstLine, lastLine, commitNumber]; uncommitted lines are commit 0.
+  assert.ok(blame.lines['src/checkout.ts'].some((r: number[]) => r[2] === 0), 'uncommitted lines are commit 0');
+  assert.ok(blame.lines['src/discounts.ts'].every((r: number[]) => r[2] === 1));
+  const missing = await api('GET', '/api/worktrees/nope/diff');
+  assert.equal(missing.status, 404);
+});
+
+test('reviewed marks and since-last-review', async () => {
+  const wt = await wtBy('feat/search-filters');
+  const full = await get(`/api/worktrees/${wt.id}/diff?mode=full`);
+  await post(`/api/worktrees/${wt.id}/reviewed`, { tree: full.tree, fingerprint: full.fingerprint });
+  const since = await get(`/api/worktrees/${wt.id}/diff?mode=since`);
+  assert.equal(since.sinceAvailable, true);
+  assert.equal(since.mode, 'since');
+  assert.equal(since.diff, '');
+  assert.equal((await wtBy('feat/search-filters')).review.needsReview, false);
+  await post(`/api/worktrees/${wt.id}/viewed`, { file: 'src/cart.ts', viewed: true, hash: 'abc' });
+  assert.equal((await get(`/api/worktrees/${wt.id}/diff?mode=full`)).viewed['src/cart.ts'], 'abc');
+});
+
+test('base override', async () => {
+  const wt = await wtBy('feat/search-filters');
+  assert.equal((await api('POST', `/api/worktrees/${wt.id}/base`, { base: 'no-such-ref' })).status, 400);
+  await post(`/api/worktrees/${wt.id}/base`, { base: 'main' });
+  assert.equal((await wtBy('feat/search-filters')).baseSource, 'set by you');
+  await post(`/api/worktrees/${wt.id}/base`, { base: '' });
+  assert.notEqual((await wtBy('feat/search-filters')).baseSource, 'set by you');
+});
+
+test('comments: create, edit, reply, resolve, reopen, delete', async () => {
+  const wt = await wtBy('feat/search-filters');
+  const c = await post('/api/comments', { wtId: wt.id, file: 'src/search.ts', side: 'new', line: 4, lineText: 'x', body: '  Tidy this  ' });
+  assert.equal(c.body, 'Tidy this');
+  assert.equal(c.status, 'draft');
+  const edited = (await api('PATCH', `/api/comments/${c.id}`, { body: 'Tidy this up' })).json;
+  assert.equal(edited.body, 'Tidy this up');
+  assert.equal((await api('POST', '/api/comments', { wtId: wt.id, file: 'a', line: 1, side: 'new', body: ' ' })).status, 400);
+  const replied = await post(`/api/comments/${c.id}/reply`, { body: 'On it', author: 'claude' });
+  assert.equal(replied.replies.length, 1);
+  const resolved = await post(`/api/comments/${c.id}/resolve`, { note: 'Done' });
+  assert.equal(resolved.status, 'resolved');
+  assert.equal((await post(`/api/comments/${c.id}/reopen`)).status, 'delivered');
+  const list = await get(`/api/worktrees/${wt.id}/comments`);
+  assert.ok(list.comments.some((x: Json) => x.id === c.id));
+  assert.equal((await api('DELETE', `/api/comments/${c.id}`)).status, 200);
+  assert.equal((await api('POST', `/api/comments/${c.id}/resolve`, {})).status, 404);
+});
+
+test('a submitted review reaches the session through the hook', async () => {
+  const wt = await wtBy('feat/checkout-discounts');
+  const prompt = await get(`/api/worktrees/${wt.id}/prompt`);
+  assert.match(prompt.text, /Add the same test for a percentage code/);
+  const review = await post(`/api/worktrees/${wt.id}/submit`, { summary: 'Nearly there' });
+  assert.equal(review.status, 'pending');
+  assert.equal((await wtBy('feat/checkout-discounts')).comments.waiting, 1);
+  const other = await post('/api/hook', { session_id: '22222222-bbbb-4bbb-8bbb-222222222222', cwd: path.join(DEMO, 'home', 'code', 'shop-worktrees', 'search-filters'), event: 'Stop' });
+  assert.equal(other.text, null, 'a different session gets nothing');
+  const mine = await post('/api/hook', { session_id: '11111111-aaaa-4aaa-8aaa-111111111111', cwd: wt.path, event: 'UserPromptSubmit' });
+  assert.match(mine.text, /Code review on `feat\/checkout-discounts`/);
+  assert.match(mine.text, /Nearly there/);
+  assert.match(mine.text, /\/resolve/);
+  assert.equal((await post('/api/hook', { session_id: '11111111-aaaa-4aaa-8aaa-111111111111', cwd: wt.path })).text, null, 'delivered once');
+  assert.equal((await api('POST', `/api/worktrees/${wt.id}/submit`, {})).status, 400);
+});
+
+test('CodeRabbit findings can be sent, dismissed and restored', async () => {
+  const wt = await wtBy('feat/checkout-discounts');
+  const { review } = await get(`/api/worktrees/${wt.id}/coderabbit`);
+  assert.equal(review.status, 'done');
+  assert.equal(review.findings.length, 2);
+  const [major, minor] = review.findings;
+  assert.equal(major.severity, 'major');
+  assert.ok(major.snippet.includes("d.kind === 'percent'"));
+  await post(`/api/findings/${minor.id}/dismiss`);
+  await post(`/api/findings/${minor.id}/restore`);
+  const sent = await post(`/api/findings/${major.id}/send`);
+  assert.ok(sent);
+  const comments = (await get(`/api/worktrees/${wt.id}/comments`)).comments;
+  assert.ok(comments.some((c: Json) => c.status === 'draft' && /CodeRabbit \(major\)/.test(c.body)));
+  assert.equal((await api('POST', `/api/worktrees/${wt.id}/coderabbit/cancel`)).status, 409);
+});
+
+test('settings: integrations, config, folders, onboarding', async () => {
+  const integ = await get('/api/integrations');
+  assert.equal(integ.gh.authed, true);
+  assert.equal(integ.gh.account, 'sam-rivera');
+  assert.equal(integ.coderabbit.authed, true);
+  assert.equal(integ.coderabbit.org, 'acme');
+  await post('/api/config', { recentDays: 5 });
+  assert.equal((await state()).config.recentDays, 5);
+  assert.equal((await api('POST', '/api/config', { recentDays: 'lots' })).status, 400);
+  await post('/api/config', { recentDays: 3 });
+  const fsList = await get(`/api/fs?path=${encodeURIComponent('~/code')}`);
+  assert.ok(fsList.entries.some((e: Json) => e.name === 'shop' && e.isRepo));
+  assert.equal((await api('GET', '/api/fs?path=/etc')).status, 403);
+  await post('/api/onboarding', { done: true });
+  assert.ok((await state()).onboardedAt);
+});
+
+test('security: mutations need x-wtr, and only localhost hosts are served', async () => {
+  assert.equal((await api('POST', '/api/config', { recentDays: 4 }, {})).status, 403);
+  // fetch won't send a different Host header, so use http directly.
+  const status = (headers: Record<string, string>, p = '/api/state') => new Promise<number>((resolve, reject) => {
+    http.get({ host: '127.0.0.1', port: PORT, path: p, headers }, (res) => { res.resume(); resolve(res.statusCode!); }).on('error', reject);
+  });
+  assert.equal(await status({ host: 'evil.example' }), 403, 'DNS-rebinding host');
+  assert.equal(await status({ host: `localhost:${PORT}` }), 200);
+  assert.equal(await status({ host: 'localhost' }, '/../../../etc/passwd'), 404, 'no path traversal');
+  assert.equal((await api('GET', '/api/nope')).status, 404);
+});
+
+test('static files and live updates', async () => {
+  const html = await (await fetch(`${BASE}/`)).text();
+  assert.match(html, /<title>/);
+  for (const f of ['app.js', 'app.css', 'sse-worker.js']) assert.equal((await fetch(`${BASE}/${f}`)).status, 200, f);
+  const ctrl = new AbortController();
+  const res = await fetch(`${BASE}/api/events`, { signal: ctrl.signal });
+  const reader = res.body!.getReader();
+  const { value } = await reader.read();
+  assert.match(new TextDecoder().decode(value), /^event: state\ndata: \{/);
+  ctrl.abort();
+});
+
+test('removal: idle, forced and merged clean-up keep the right branches', async () => {
+  const spike = await wtBy('spike/graphql-gateway');
+  const job = await post('/api/cleanup', { ids: [spike.id, (await wtBy('feat/search-filters')).id] });
+  assert.equal(job.total, 1, 'the in-use worktree is skipped');
+  await until(async () => !(await wtBy('spike/graphql-gateway')), 'the spike to be removed');
+  assert.ok(branches().includes('spike/graphql-gateway'), 'an unmerged branch is kept');
+  assert.ok(!fs.existsSync(spike.path));
+
+  const apiWt = await wtBy('refactor/api-client');
+  await post(`/api/worktrees/${apiWt.id}/remove`, { force: true });
+  await until(async () => !(await wtBy('refactor/api-client')), 'the forced removal');
+  assert.ok(branches().includes('refactor/api-client'), 'a forced removal keeps the branch');
+
+  await post('/api/cleanup/safe');
+  await until(async () => !(await wtBy('chore/upgrade-node')), 'the merged clean-up');
+  assert.ok(!branches().includes('chore/upgrade-node'), 'a branch that is all in its merged PR is deleted');
+  assert.equal((await api('POST', '/api/cleanup/safe')).status, 409);
+
+  const st = await state();
+  const cleaned = Object.fromEntries(st.cleaned.map((c: Json) => [c.branch, c]));
+  assert.equal(cleaned['spike/graphql-gateway'].reason, 'idle');
+  assert.equal(cleaned['refactor/api-client'].how, 'forced');
+  assert.deepEqual(cleaned['refactor/api-client'].lostFiles, ['package-lock.json']);
+  assert.equal(cleaned['chore/upgrade-node'].branchDeleted, true);
+  assert.ok(st.jobs.every((j: Json) => j.status === 'done' && j.failed.length === 0));
+  await until(async () => !fs.readdirSync(path.dirname(spike.path)).some((f) => f.includes('.removing-')), 'background deletes', 20_000);
+});
+
+test('the page renders a worktree without errors', { skip: !fs.existsSync(process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome') && 'Chrome not found' }, async () => {
+  const wt = await wtBy('feat/checkout-discounts');
+  const page = await openPage(`${BASE}/#/${wt.id}`);
+  try {
+    const rows = await page.waitFor<number>("document.querySelectorAll('tr.line').length").catch(async (e) => {
+      throw new Error(`${e.message}\nPage shows: ${await page.eval("document.querySelector('#main')?.innerText.slice(0, 300)")}`);
+    });
+    assert.ok(rows > 20, `rendered ${rows} diff rows`);
+    assert.ok(await page.waitFor("document.querySelectorAll('.cr-finding').length"), 'CodeRabbit findings shown inline');
+    assert.ok(await page.waitFor("document.querySelectorAll('.cbar, [class*=commit-c]').length || document.querySelectorAll('tr.line td').length"));
+    await page.eval("document.querySelector('[data-act=mode][data-mode=commits]').click()");
+    assert.ok(await page.waitFor("document.querySelectorAll('.commit-group').length >= 3"), 'a section per commit');
+    for (const hash of ['#/cleanup', '#/settings']) {
+      await page.eval(`location.hash = '${hash}'`);
+      assert.ok(await page.waitFor("document.querySelector('#main h1')?.textContent"), hash);
+    }
+    assert.deepEqual(page.errors, []);
+  } finally {
+    await page.close();
+  }
+});

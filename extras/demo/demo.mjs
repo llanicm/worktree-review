@@ -376,7 +376,9 @@ fs.writeFileSync(path.join(DATA, 'state.json'), JSON.stringify({
 // ---------- start the server and add review activity ----------
 
 const env = { ...process.env, HOME, PATH: `${BIN}:${process.env.PATH}`, WTR_PORT: String(PORT), WTR_DATA_DIR: DATA };
-const server = spawn(process.execPath, [path.join(ROOT, 'server', 'server.mjs')], { env, detached: true, stdio: ['ignore', fs.openSync(path.join(DEMO, 'server.log'), 'a'), fs.openSync(path.join(DEMO, 'server.log'), 'a')] });
+// WTR_DIST: run a build other than ./dist (the tests use this).
+const SERVER = path.join(process.env.WTR_DIST ? path.resolve(process.env.WTR_DIST) : path.join(ROOT, 'dist'), 'server.mjs');
+const server = spawn(process.execPath, [SERVER], { env, detached: true, stdio: ['ignore', fs.openSync(path.join(DEMO, 'server.log'), 'a'), fs.openSync(path.join(DEMO, 'server.log'), 'a')] });
 server.unref();
 
 const base = `http://127.0.0.1:${PORT}`;

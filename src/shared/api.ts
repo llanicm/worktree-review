@@ -1,0 +1,424 @@
+// The HTTP API between the server and the page. Both sides import these types, so a change
+// to a response shape fails to compile wherever it's used. Types only: nothing here ships.
+
+// ---------- config ----------
+
+export type Editor = 'vscode' | 'cursor' | 'windsurf' | 'zed' | 'none';
+
+export interface Config {
+  /** Extra folders whose immediate children are scanned for repos. */
+  roots: string[];
+  /** Extra repo paths to always include. */
+  extraRepos: string[];
+  /** Remove a worktree automatically once its PR merges (only when safe). */
+  autoCleanup: boolean;
+  /** Worktrees touched within this many days count as "recent". */
+  recentDays: number;
+  prPollMinutes: number;
+  /** Target of "open" links. */
+  editor: Editor;
+}
+
+// ---------- worktrees ----------
+
+export type PRState = 'OPEN' | 'CLOSED' | 'MERGED';
+
+export interface PullRequest {
+  number: number;
+  state: PRState;
+  isDraft: boolean;
+  url: string;
+  title: string;
+  mergedAt: string | null;
+}
+
+export type SessionStatus = 'busy' | 'idle' | 'shell' | 'unknown' | (string & {});
+
+export interface SessionRef {
+  sessionId: string;
+  name: string;
+  status: SessionStatus;
+}
+
+export interface Session extends SessionRef {
+  cwd?: string;
+}
+
+export type WorktreeErrorKind = 'broken-link' | 'submodules' | 'dirty' | 'locked' | 'other';
+
+export interface WorktreeError {
+  kind: WorktreeErrorKind;
+  message: string;
+  detail: string;
+}
+
+/** What kind of uncommitted changes a worktree has, which decides whether removing it could lose work. */
+export type DirtyKind = 'deleted-only' | 'lockfile-only' | 'work';
+
+export interface DirtyFile {
+  /** Two-letter `git status --porcelain` code, e.g. " M", "??". */
+  xy: string;
+  file: string;
+}
+
+export interface UnmatchedCommit {
+  sha: string;
+  subject: string;
+}
+
+export interface CleanupStatus {
+  /** merged: its PR merged. idle: no PR merged, and only ever removed by hand. */
+  kind: 'merged' | 'idle';
+  eligible: boolean;
+  /** Why it can't be removed. */
+  reasons: string[];
+  /** Worth knowing, but doesn't block removal. */
+  notes: string[];
+  /** Whether the branch is deleted along with the worktree. */
+  branchSafe: boolean;
+  /** Whether "Remove anyway" can override every reason. */
+  forceable: boolean;
+  dirty: { kind: DirtyKind | null; count: number; files: DirtyFile[] } | null;
+  unmatched: UnmatchedCommit[];
+  /** Whether it's removed automatically. */
+  auto: boolean;
+}
+
+export type ReviewStatus = 'running' | 'done' | 'failed' | 'cancelled';
+
+export interface CodeRabbitSummary {
+  status: ReviewStatus;
+  startedAt: number;
+  finishedAt: number | null;
+  heartbeatAt: number;
+  open: number;
+  total: number;
+  /** Changes whenever a finding's status changes. */
+  sig: string;
+}
+
+export interface DiffStats {
+  files: number;
+  add: number;
+  del: number;
+}
+
+export interface Worktree {
+  id: string;
+  path: string;
+  repoName: string;
+  branch: string | null;
+  head: string | undefined;
+  isMain: boolean;
+  locked: boolean;
+  detached: boolean;
+  /** Changes whenever its HEAD, base or working tree changes. */
+  fingerprint: string | null;
+  /** Number of uncommitted entries. */
+  dirty: number;
+  lastActivity: number;
+  ahead: number;
+  stats: DiffStats | null;
+  baseRef: string | undefined;
+  baseSource: string | undefined;
+  baseError: string | null | undefined;
+  pr: PullRequest | null;
+  sessions: SessionRef[];
+  cleanup: CleanupStatus | null;
+  error: WorktreeError | null;
+  /** What's happening to it right now, e.g. "cleanup" or "remove". */
+  busy: string | null;
+  dirtyKind: DirtyKind | null;
+  coderabbit: CodeRabbitSummary | null;
+  review: { reviewedAt: number | null; needsReview: boolean };
+  comments: { draft: number; waiting: number; open: number; sig: string };
+}
+
+// ---------- background jobs ----------
+
+export interface JobItem {
+  id: string;
+  branch: string | null;
+  path: string;
+}
+
+export interface JobFailure extends JobItem {
+  error: string;
+  kind: WorktreeErrorKind | null;
+}
+
+export interface Job {
+  id: string;
+  kind: 'cleanup' | 'remove' | 'repair' | (string & {});
+  title: string;
+  total: number;
+  done: number;
+  current: (JobItem & { startedAt: number }) | null;
+  ok: JobItem[];
+  failed: JobFailure[];
+  status: 'running' | 'done';
+  startedAt: number;
+  finishedAt: number | null;
+  dismissed: boolean;
+}
+
+export interface CleanedEntry {
+  path: string;
+  branch: string | null;
+  sha: string;
+  repoRoot: string;
+  how: 'auto' | 'manual' | 'forced';
+  branchDeleted: boolean;
+  branchKept: string | null;
+  at: number;
+  lostFiles?: string[];
+  reason?: 'merged' | 'idle';
+  pr: { number: number; url: string; title: string; state?: PRState } | null;
+}
+
+export interface CodeRabbitLogin {
+  running: boolean;
+  url: string | null;
+  error: string | null;
+  startedAt: number;
+}
+
+export interface RepoInfo {
+  name: string;
+  root: string;
+  github: string | null;
+}
+
+/** GET /api/state, and every live update on /api/events. */
+export interface PublicState {
+  port: number;
+  version: string;
+  home: string;
+  prError: string | null;
+  config: Config;
+  onboardedAt: number | null;
+  repos: RepoInfo[];
+  coderabbitLogin: CodeRabbitLogin | null;
+  jobs: Job[];
+  coderabbitReady: boolean;
+  installedAt: number;
+  sessions: Session[];
+  cleaned: CleanedEntry[];
+  worktrees: Worktree[];
+}
+
+// ---------- diffs ----------
+
+export interface Commit {
+  /** 1-based, oldest first. 0 means uncommitted changes. */
+  n: number;
+  sha: string;
+  time: number;
+  author: string;
+  subject: string;
+  body: string;
+}
+
+export interface CommitDiff extends Commit {
+  diff: string;
+  truncated: boolean;
+}
+
+interface DiffBase {
+  sinceAvailable: boolean;
+  reviewedAt: number | null;
+  fingerprint: string | null;
+  /** Tree object of the working tree, untracked files included. */
+  tree: string;
+  mergeBase: string;
+  baseRef: string | undefined;
+  baseSource: string | undefined;
+  /** file -> content hash, for files ticked as viewed. */
+  viewed: Record<string, string>;
+}
+
+/** GET /api/worktrees/:id/diff?mode=full|since */
+export interface FullDiff extends DiffBase {
+  mode: 'full' | 'since';
+  commits: Commit[];
+  /** file -> numbers of the commits that touched it (0 = uncommitted). */
+  fileCommits: Record<string, number[]>;
+  truncated: boolean;
+  diff: string;
+}
+
+/** GET /api/worktrees/:id/diff?mode=commits */
+export interface CommitsDiff extends DiffBase {
+  mode: 'commits';
+  commits: CommitDiff[];
+  hiddenCommits: number;
+  uncommitted: string;
+}
+
+export type DiffResponse = FullDiff | CommitsDiff;
+
+/** [firstLine, lastLine, commitNumber]: a run of lines that one commit introduced (0 = uncommitted). */
+export type BlameRun = [number, number, number];
+
+/** GET /api/worktrees/:id/blame */
+export interface BlameResponse {
+  fingerprint: string | null;
+  lines: Record<string, BlameRun[]>;
+}
+
+// ---------- comments & reviews ----------
+
+export type CommentStatus = 'draft' | 'pending' | 'delivered' | 'resolved';
+export type Side = 'old' | 'new';
+
+export interface Reply {
+  author: 'you' | 'claude' | (string & {});
+  body: string;
+  at: number;
+}
+
+export interface Comment {
+  id: string;
+  wtId: string;
+  wtPath: string;
+  file: string;
+  line: number;
+  side: Side;
+  lineText: string;
+  body: string;
+  status: CommentStatus;
+  createdAt: number;
+  replies: Reply[];
+  /** Set when the comment was made on one commit in By commit view. */
+  commit?: string;
+  commitSubject?: string;
+  reviewId?: string;
+  resolvedAt?: number;
+  /** Set when it came from a CodeRabbit finding. */
+  fromFinding?: string;
+}
+
+export interface Review {
+  id: string;
+  wtId: string;
+  wtPath: string;
+  summary: string;
+  commentIds: string[];
+  /** Deliver to this session, or to whichever session works in the worktree when null. */
+  targetSession: string | null;
+  status: 'pending' | 'delivered' | 'cancelled';
+  createdAt: number;
+  deliveredAt?: number;
+}
+
+/** GET /api/worktrees/:id/comments */
+export interface CommentsResponse {
+  comments: Comment[];
+  reviews: Review[];
+}
+
+export interface NewComment {
+  wtId: string;
+  file: string;
+  line: number;
+  side: Side;
+  lineText?: string;
+  body: string;
+  commit?: string;
+  commitSubject?: string;
+}
+
+// ---------- CodeRabbit ----------
+
+export type FindingStatus = 'open' | 'sent' | 'dismissed';
+
+export interface Finding {
+  id: string;
+  severity: string;
+  file: string;
+  startLine: number | null;
+  endLine: number | null;
+  title: string;
+  comment: string;
+  codegen: string;
+  suggestions: string;
+  status: FindingStatus;
+  snippet?: string;
+  commentId?: string;
+}
+
+export interface CodeRabbitUsage {
+  limit: number;
+  remaining: number;
+  fullInMs: number;
+  windowMs: number;
+  repository: string;
+}
+
+export interface CodeRabbitReview {
+  status: ReviewStatus;
+  startedAt: number;
+  finishedAt: number | null;
+  baseRef: string | undefined;
+  fingerprint: string | null;
+  findings: Finding[];
+  reviewedFiles: string[];
+  error: string | null;
+  heartbeatAt: number;
+  usage: CodeRabbitUsage | null;
+  message?: string;
+}
+
+/** GET /api/worktrees/:id/coderabbit */
+export interface CodeRabbitResponse {
+  review: CodeRabbitReview | null;
+  usage: CodeRabbitUsage | null;
+}
+
+// ---------- settings ----------
+
+export interface Integrations {
+  gh: { installed: boolean; version: string | null; authed: boolean; account: string | null };
+  coderabbit: {
+    installed: boolean;
+    version: string | null;
+    authed: boolean;
+    user?: string;
+    email?: string;
+    org?: string | null;
+    orgs?: string[];
+    plan?: string | null;
+    seat?: string | null;
+  };
+  coderabbitLogin: CodeRabbitLogin | null;
+  claude: { lastHookAt: number | null; sessions: number; version: string };
+  node: string;
+  dataDir: string;
+  configPath: string;
+}
+
+export interface DirEntry {
+  name: string;
+  path: string;
+  isRepo: boolean;
+}
+
+/** GET /api/fs?path= */
+export interface DirListing {
+  path: string;
+  display: string;
+  parent: string | null;
+  isRepo: boolean;
+  repoChildren: number;
+  entries: DirEntry[];
+}
+
+export interface RepairResult {
+  fixed: { path: string; branch: string | null }[];
+  failed: { id: string; path: string; branch: string | null; error: string }[];
+}
+
+/** Body of every error response. */
+export interface ApiError {
+  error: string;
+}
