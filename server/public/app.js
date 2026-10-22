@@ -321,6 +321,7 @@ function renderFile(f, byAnchor, used) {
     ? touched.map((n) => `<span class="cchip ${commitClass(n)}" title="${esc(n ? `${commitByN(n)?.sha.slice(0, 8)} ${commitByN(n)?.subject || ''}` : 'Not committed yet')}">${commitLabel(n)}</span>`).join('') : '';
   const head = `<div class="file-head">
     <button class="caret" data-act="toggle-file" data-file="${esc(f.uid)}" aria-label="Collapse">${collapsed ? '▸' : '▾'}</button>
+    ${f.commitN !== undefined && f.commit !== null || f.uncommitted ? `<span class="cchip fill ${commitClass(f.commitN)}" title="${esc(f.uncommitted ? 'Uncommitted changes' : `Commit #${f.commitN}`)}">${f.uncommitted ? '±' : `#${f.commitN}`}</span>` : ''}
     <span class="file-name" title="${esc(f.path)}">${name}</span>${tag}${gen}${commitChips}
     <span class="stat-add">+${f.add}</span><span class="stat-del">−${f.del}</span>
     ${collapsed && nOpen ? `<span class="chip comments" title="Expand to see them">${nOpen} comment${nOpen === 1 ? '' : 's'}</span>` : ''}
@@ -478,12 +479,12 @@ function renderMain() {
   if (byCommit) {
     filesHtml = v.groups.map((g) => {
       const shut = S.shutCommits.has(g.n);
-      return `<section class="commit-group ${shut ? 'shut' : ''}" id="cg-${g.n}">
-      <div class="commit-head ${commitClass(g.n)}"><button class="caret" data-act="toggle-commit" data-n="${g.n}" aria-expanded="${!shut}" aria-label="${shut ? 'Expand' : 'Collapse'} this commit" title="${shut ? 'Expand' : 'Collapse'} this commit">${shut ? '▸' : '▾'}</button><span class="cnum">${g.n ? `#${g.n}` : '±'}</span>
+      return `<section class="commit-group ${commitClass(g.n)} ${shut ? 'shut' : ''}" id="cg-${g.n}">
+      <div class="commit-head"><button class="caret" data-act="toggle-commit" data-n="${g.n}" aria-expanded="${!shut}" aria-label="${shut ? 'Expand' : 'Collapse'} this commit" title="${shut ? 'Expand' : 'Collapse'} this commit">${shut ? '▸' : '▾'}</button><span class="cnum">${g.n ? `#${g.n}` : '±'}</span>
         <span class="commit-title">${esc(g.subject)}</span>
         <span class="muted small">${g.sha ? `<span class="mono">${g.sha.slice(0, 8)}</span> · ${esc(g.author)} · ${ago(g.time)} · ` : ''}${g.files.length} file${g.files.length === 1 ? '' : 's'}</span></div>
-      ${shut ? '' : `${g.truncated ? '<div class="callout warn small">This commit is too large to show in full.</div>' : ''}
-      ${g.files.map((f) => renderFile(f, byAnchor, used)).join('') || '<div class="file-note">No file changes.</div>'}`}
+      ${shut ? '' : `<div class="commit-files">${g.truncated ? '<div class="callout warn small">This commit is too large to show in full.</div>' : ''}
+      ${g.files.map((f) => renderFile(f, byAnchor, used)).join('') || '<div class="file-note">No file changes.</div>'}</div>`}
     </section>`;
     }).join('') + (v.diff.hiddenCommits ? `<div class="callout small">${v.diff.hiddenCommits} older commits aren't shown.</div>` : '');
   } else {
@@ -847,8 +848,8 @@ async function loadView({ quiet = false } = {}) {
     S.mode = diff.mode;
     let files, groups = null;
     if (diff.mode === 'commits') {
-      groups = diff.commits.map((c) => ({ ...c, files: parseDiff(c.diff).map((f) => ({ ...f, commit: c.sha, uid: `${c.sha}~${f.path}` })) }));
-      const unc = parseDiff(diff.uncommitted).map((f) => ({ ...f, commit: null, uncommitted: true, uid: `u~${f.path}` }));
+      groups = diff.commits.map((c) => ({ ...c, files: parseDiff(c.diff).map((f) => ({ ...f, commit: c.sha, commitN: c.n, uid: `${c.sha}~${f.path}` })) }));
+      const unc = parseDiff(diff.uncommitted).map((f) => ({ ...f, commit: null, commitN: 0, uncommitted: true, uid: `u~${f.path}` }));
       if (unc.length) groups.push({ n: 0, sha: null, subject: 'Uncommitted changes', files: unc });
       files = groups.flatMap((g) => g.files);
     } else {

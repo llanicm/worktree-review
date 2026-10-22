@@ -1,6 +1,6 @@
 {
   "name": "worktree-review",
-  "version": "0.3.1",
+  "version": "0.3.2",
   "description": "A local, GitHub-style review screen for every git worktree Claude is working in. Comment on lines, send the review straight to the session doing the work, and clean up worktrees once their PR merges.",
   "author": { "name": "John McInall" },
   "homepage": "https://github.com/llanicm/worktree-review",
