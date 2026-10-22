@@ -609,6 +609,19 @@ async function removeWorktree(wt, how) {
 // removals run here and report progress over the live connection.
 
 const jobs = [];
+let pendingShutdown = null;
+
+function shutdownNow(replacement) {
+  if (replacement) {
+    const out = fs.openSync(path.join(DATA_DIR, 'server.log'), 'a');
+    server.close();
+    // Give the port a moment to free up before the replacement binds it.
+    setTimeout(() => {
+      spawn(process.execPath, [replacement], { cwd: path.resolve(path.dirname(replacement), '..'), detached: true, stdio: ['ignore', out, out], env: process.env }).unref();
+      process.exit(0);
+    }, 300);
+  } else process.exit(0);
+}
 
 function startJob(kind, title, items, worker) {
   if (kind === 'cleanup' && jobs.some((j) => j.kind === 'cleanup' && j.status === 'running')) {
@@ -641,6 +654,7 @@ function startJob(kind, title, items, worker) {
     job.finishedAt = Date.now();
     log(`${job.title}: ${job.ok.length} ok, ${job.failed.length} failed`, job.failed.map((f) => `${f.path}: ${f.error}`).join(' | '));
     changed();
+    if (pendingShutdown && !jobs.some((j) => j.status === 'running')) setTimeout(() => shutdownNow(pendingShutdown.replacement), 1000);
   })();
   return job;
 }
@@ -1407,7 +1421,17 @@ const routes = [
     changed();
     return { ok: true };
   }],
-  ['POST', /^\/api\/shutdown$/, () => { setTimeout(() => process.exit(0), 100); return { ok: true }; }],
+  ['POST', /^\/api\/shutdown$/, (m, body) => {
+    // Never cut a removal off halfway: finish running jobs, then hand over to the replacement if one was named.
+    const replacement = typeof body.restartWith === 'string' && body.restartWith.endsWith('server.mjs') && fs.existsSync(body.restartWith) ? body.restartWith : null;
+    if (jobs.some((j) => j.status === 'running')) {
+      pendingShutdown = { replacement };
+      log(`shutdown requested; waiting for running jobs to finish${replacement ? `, then starting ${replacement}` : ''}`);
+      return { ok: true, deferred: true };
+    }
+    setTimeout(() => shutdownNow(replacement), 100);
+    return { ok: true };
+  }],
   ['POST', /^\/api\/hook$/, (m, body) => {
     lastHookAt = Date.now();
     refreshSessions();

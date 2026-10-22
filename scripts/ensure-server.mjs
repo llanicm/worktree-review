@@ -40,9 +40,15 @@ function start() {
 async function main() {
   const current = await running();
   if (current && current !== 'dev' && newer(VERSION, current)) {
-    await fetch(`http://127.0.0.1:${PORT}/api/shutdown`, { method: 'POST', headers: { 'x-wtr': '1' } }).catch(() => {});
-    for (let i = 0; i < 20 && (await running()); i++) await wait(150);
-    start();
+    const server = path.join(ROOT, 'server', 'server.mjs');
+    const res = await fetch(`http://127.0.0.1:${PORT}/api/shutdown`, {
+      method: 'POST', headers: { 'x-wtr': '1', 'content-type': 'application/json' }, body: JSON.stringify({ restartWith: server }),
+    }).then((r) => r.json()).catch(() => ({}));
+    // If a removal is running, the old server finishes it and starts this version itself.
+    if (!res.deferred) {
+      for (let i = 0; i < 20 && (await running()); i++) await wait(150);
+      start();
+    }
   } else if (!current) {
     start();
   }
