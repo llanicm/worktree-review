@@ -18,7 +18,15 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      # Types, dist/ matching src/, and the end-to-end smoke test (the page check runs where Chrome is installed).
+      # dist/ is built by the build workflow after a merge; a PR that edits it would only conflict.
+      - name: PRs leave dist/ alone
+        if: github.event_name == 'pull_request'
+        run: |
+          if git diff --name-only "origin/${{ github.base_ref }}...HEAD" | grep -q '^dist/'; then
+            echo "::error::This PR changes dist/. Leave it out: it's rebuilt from src/ automatically after merging."
+            exit 1
+          fi
+      # Types, then a fresh build of src/ and the end-to-end smoke test against it (the page check runs in Chrome).
       - run: npm run check
         env:
           CHROME: /usr/bin/google-chrome

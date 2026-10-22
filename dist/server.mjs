@@ -525,7 +525,8 @@ function refreshWorktree(wt, { force = false } = {}) {
     wt.untracked = untracked;
     wt.lastActivity = Math.max(wt.commitTime || 0, maxMtime);
     const base = resolveBase(wt);
-    const fp = sha1([head, base.ref, status, ...stamps].join("|"));
+    const baseSha = (await git(wt.path, ["rev-parse", "--verify", "--quiet", `${base.ref}^{commit}`]).catch(() => "")).trim();
+    const fp = sha1([head, base.ref, baseSha, status, ...stamps].join("|"));
     if (fp !== wt.fingerprint || force) {
       wt.fingerprint = fp;
       wt.baseRef = base.ref;

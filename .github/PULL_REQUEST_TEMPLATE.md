@@ -8,7 +8,7 @@
 
 ## Checklist
 
-- [ ] `npm run check` passes (types, `dist/` rebuilt and committed, smoke test)
+- [ ] `npm run check` passes (types and the smoke test), and `dist/` is left out (CI rebuilds it after merging)
 - [ ] Behaviour added or fixed is covered by the smoke test
 - [ ] Anything that removes worktrees or branches can't lose uncommitted work or unique commits
 - [ ] README updated if what users see or do has changed

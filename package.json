@@ -9,17 +9,17 @@
   },
   "scripts": {
     "build": "node build.mjs",
-    "watch": "node build.mjs --watch",
     "typecheck": "tsc -p src/server && tsc -p src/web && tsc -p src/web/worker && tsc -p test",
-    "test": "npm run build && node --test --test-reporter=spec test/*.test.ts",
-    "check": "npm run typecheck && node build.mjs --check && node --test test/*.test.ts",
-    "demo": "npm run build && node extras/demo/demo.mjs",
-    "bench": "node test/bench.ts"
+    "watch": "node build.mjs --watch --out .build",
+    "demo": "node build.mjs --out .build && WTR_DIST=.build node extras/demo/demo.mjs",
+    "test": "node build.mjs --out .build && WTR_DIST=.build node --test --test-reporter=spec test/*.test.ts",
+    "check": "npm run typecheck && npm test",
+    "bench": "node build.mjs --out .build && WTR_DIST=.build node test/bench.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "esbuild": "^0.25.0",
     "typescript": "^5.7.0"
   },
-  "version": "2.0.4"
+  "version": "2.0.5"
 }

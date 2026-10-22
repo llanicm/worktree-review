@@ -178,9 +178,10 @@ clone this repo and run `extras/install-service.sh`. `extras/uninstall-service.s
 
 Worktree Review is strict TypeScript with no runtime dependencies. The server shells out to `git`,
 `gh` and `coderabbit`; the page is plain DOM code with no framework. `build.mjs` compiles `src/` with
-esbuild into `dist/`, and `dist/` is committed, because a Claude Code plugin is installed straight
-from the repo with no build step. Running it needs Node 18+; developing it needs Node 22.18+, which
-runs the TypeScript tests directly.
+esbuild. The result in `dist/` is committed, because a Claude Code plugin is installed straight from
+the repo with no build step, but nobody builds it by hand: a workflow rebuilds and commits it after
+every change to `main`. Running it needs Node 18+; developing it needs Node 22.18+, which runs the
+TypeScript tests directly.
 
 | Path | |
 |---|---|
@@ -188,16 +189,16 @@ runs the TypeScript tests directly.
 | `src/web/` | The page. `lazy.ts` draws only the diff near the screen; `collapse.ts` updates collapsed sections in place. `worker/sse-worker.ts` shares one live connection across tabs, because browsers cap connections per host |
 | `src/shared/api.ts` | Types for every API request and response, used by both sides, so a change to one breaks the compile on the other |
 | `src/scripts/` | `hook.ts` hands submitted reviews to the right session; `ensure-server.ts` starts or upgrades the server |
-| `dist/` | The build that runs (committed) |
+| `dist/` | The build that runs, committed by CI after each merge |
 | `test/` | `smoke.test.ts` checks every route, the removal rules, hook delivery, the security checks and the page in Chrome, against the demo. `bench.ts` measures it on a large worktree |
 | `extras/demo/` | A self-contained demo, and the script that takes the README screenshots |
 
 ```sh
 npm install
-npm run watch       # rebuild dist/ as you edit
+npm run watch       # rebuild into .build/ (git-ignored) as you edit
 npm run demo        # try it on a made-up repo at http://localhost:4848 (prints how to stop it)
-npm test            # build, then the smoke test
-npm run check       # types, dist/ matching src/, and the smoke test (what CI runs)
+npm test            # build into .build/, then the smoke test
+npm run check       # types, then npm test (what CI runs on every PR)
 npm run bench       # timings on a large worktree
 ```
 
@@ -207,8 +208,9 @@ own repos or accounts. To refresh the screenshots, run `node extras/demo/screens
 demo is up. The page check, the benchmark and the screenshots need Google Chrome; set `CHROME` to its
 path if it isn't in the usual macOS place.
 
-When you change the plugin, run `npm run build`, commit `dist/` with your change, and bump `version`
-in `.claude-plugin/plugin.json`, so running dashboards are replaced on the next session start.
+Releasing is a version bump merged to `main`, then a `v<version>` tag on the commit where CI rebuilt
+`dist/`; see [CONTRIBUTING.md](CONTRIBUTING.md#releasing-maintainers). Running dashboards are replaced
+by the new version on the next session start.
 
 ## Contributing
 
