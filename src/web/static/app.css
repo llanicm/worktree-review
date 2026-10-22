@@ -578,3 +578,18 @@ td.blame .b-num { color: var(--c); font-weight: 600; margin-right: 6px; }
 td.blame .b-sha { font-family: var(--mono); margin-right: 6px; }
 td.blame .b-who { margin-right: 6px; color: var(--fg); }
 @media (max-width: 900px) { table.diff col.blame { width: 120px; } td.blame .b-sha, td.blame .b-when { display: none; } }
+
+/* Worktree header: where it lives, and what it's compared with */
+.wt-meta { display: flex; flex-direction: column; gap: 8px; margin: 10px 0 18px; font-size: 13px; color: var(--fg-muted); }
+.meta-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; }
+.meta-item { display: inline-flex; align-items: center; gap: 6px; }
+.meta-item svg { flex: none; opacity: .8; }
+.path-chip { display: inline-flex; align-items: center; gap: 2px; max-width: 100%; min-width: 0; background: var(--bg-soft); border: 1px solid var(--border-soft); border-radius: 6px; padding: 1px 2px 1px 8px; }
+.path-chip .mono { color: var(--fg); font-family: var(--mono); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.icon-btn { display: inline-flex; align-items: center; justify-content: center; width: 24px; height: 22px; border: 0; border-radius: 4px; background: none; color: var(--fg-muted); cursor: pointer; }
+.icon-btn:hover { background: var(--border-soft); color: var(--fg); }
+.base-select { font: inherit; font-family: var(--mono); font-size: 12px; color: var(--fg); background: var(--bg); border: 1px solid var(--border); border-radius: 6px; padding: 3px 26px 3px 8px; max-width: 360px; cursor: pointer; }
+.base-select:hover { border-color: var(--fg-muted); }
+.base-other { display: inline-flex; gap: 6px; align-items: center; }
+.base-other input { width: 240px; padding: 3px 8px; border: 1px solid var(--accent); border-radius: 6px; background: var(--bg); color: var(--fg); font-family: var(--mono); font-size: 12px; }
+@media (max-width: 700px) { .base-select, .base-other input { max-width: 200px; } }

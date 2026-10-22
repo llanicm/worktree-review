@@ -462,9 +462,12 @@ async function detectStackBase(wt, repo) {
   return best;
 }
 function resolveBase(wt) {
-  const repo = repoOf(wt);
   const s = state.worktrees[wt.id];
   if (s?.baseOverride) return { ref: s.baseOverride, source: "set by you" };
+  return automaticBase(wt);
+}
+function automaticBase(wt) {
+  const repo = repoOf(wt);
   if (wt.pr?.baseRefName) return { ref: `origin/${wt.pr.baseRefName}`, source: `PR #${wt.pr.number} base` };
   if (wt.stackBase) return { ref: wt.stackBase, source: "stacked on" };
   return { ref: repo.defaultBase, source: "default" };
@@ -578,6 +581,11 @@ async function pollWorktrees() {
       }
     }
   }));
+}
+async function baseChoices(wt) {
+  const refs = async (prefix, n) => (await git(wt.path, ["for-each-ref", "--sort=-committerdate", `--count=${n}`, "--format=%(refname:short)", prefix]).catch(() => "")).split("\n").filter((r) => r && r !== wt.branch && !r.endsWith("/HEAD"));
+  const [branches, remotes] = await Promise.all([refs("refs/heads", 25), refs("refs/remotes", 25)]);
+  return { automatic: automaticBase(wt), current: { ref: wt.baseRef ?? "", source: wt.baseSource ?? "" }, branches, remotes };
 }
 
 // src/server/cleanup-status.ts
@@ -1838,6 +1846,7 @@ var arg = (m, i = 1) => m[i];
 var routes = [
   ["GET", /^\/api\/state$/, () => publicState()],
   ["GET", /^\/api\/worktrees\/(\w+)\/diff$/, (m, _body, url) => getDiff(getWt(arg(m)), url.searchParams.get("mode"))],
+  ["GET", /^\/api\/worktrees\/(\w+)\/bases$/, (m) => baseChoices(getWt(arg(m)))],
   ["GET", /^\/api\/worktrees\/(\w+)\/blame$/, (m) => getBlame(getWt(arg(m)))],
   ["GET", /^\/api\/worktrees\/(\w+)\/blame\/file$/, (m, _body, url) => getFileBlame(getWt(arg(m)), url.searchParams.get("path") || "")],
   ["GET", /^\/api\/worktrees\/(\w+)\/comments$/, (m) => {

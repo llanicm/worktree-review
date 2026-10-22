@@ -475,6 +475,18 @@ export interface HookResponse {
   text: string | null;
 }
 
+/** GET /api/worktrees/:id/bases: the choices in the "Compare with" menu. */
+export interface BaseChoices {
+  /** Used when you haven't picked one. */
+  automatic: { ref: string; source: string };
+  /** In use now ("set by you" when picked). */
+  current: { ref: string; source: string };
+  /** Local branches, most recently committed first. */
+  branches: string[];
+  /** Remote-tracking branches, most recently committed first. */
+  remotes: string[];
+}
+
 /** Body of every error response. */
 export interface ApiError {
   error: string;

@@ -14,6 +14,7 @@ import { defaultWorktree, renderSidebar } from './sidebar.ts';
 import { api, curWt, errMsg, need, S, st, view } from './state.ts';
 import { copy, expandHome, fnv, toast } from './util.ts';
 import { renderMain } from './view.ts';
+import { redrawHeaderMeta } from './header.ts';
 
 export type Action = (el: HTMLElement, e: Event) => void | Promise<void>;
 
@@ -150,8 +151,14 @@ export const actions: Record<string, Action> = {
     loadView();
   },
   'set-base': async () => {
-    try { await api('POST', `/api/worktrees/${S.selId}/base`, { base: need<HTMLInputElement>('#base').value }); S.view = null; loadView(); } catch (e) { toast(errMsg(e), true); }
+    try {
+      await api('POST', `/api/worktrees/${S.selId}/base`, { base: need<HTMLInputElement>('#base').value.trim() });
+      S.baseOther = null;
+      S.view = null;
+      loadView();
+    } catch (e) { toast(errMsg(e), true); }
   },
+  'base-other-cancel': () => { S.baseOther = null; redrawHeaderMeta(); },
   'reset-base': async () => { await api('POST', `/api/worktrees/${S.selId}/base`, { base: '' }); S.view = null; loadView(); },
   'copy-path': async () => { const wt = curWt(); if (wt) await copy(wt.path, 'Path copied'); },
   'copy-prompt': async () => { const { text } = await api<{ text: string }>('GET', `/api/worktrees/${S.selId}/prompt`); await copy(text, 'Review copied as a prompt'); },

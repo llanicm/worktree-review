@@ -4,7 +4,7 @@ import { loadCodeRabbit } from './coderabbit.ts';
 import { redrawFile } from './collapse.ts';
 import { blameKey } from './file.ts';
 import { parseDiff } from './diff.ts';
-import { headerHtml } from './header.ts';
+import { headerHtml, loadBases } from './header.ts';
 import { loadIntegrations, setupSig } from './setup.ts';
 import { defaultWorktree, renderSidebar } from './sidebar.ts';
 import { api, curWt, errMsg, need, S } from './state.ts';
@@ -72,6 +72,11 @@ function select(id: string) {
   S.selId = id;
   S.mode = null;
   S.view = null;
+  // Branches come and go, so the "Compare with" choices are fetched again each time a worktree is opened.
+  S.bases.delete(id);
+  S.baseOther = null;
+  const wt = S.st?.worktrees.find((w) => w.id === id);
+  if (wt) loadBases(wt);
   S.toggled.clear();
   S.forceRender.clear();
   S.editors.clear();

@@ -7,6 +7,7 @@ import { renderSidebar } from './sidebar.ts';
 import { connect } from './live.ts';
 import { onHash } from './loading.ts';
 import { saveConfig } from './setup.ts';
+import { chooseBase, redrawHeaderMeta } from './header.ts';
 import { $, errMsg, need, S, view } from './state.ts';
 import { elapsed, toast } from './util.ts';
 import { renderMain } from './view.ts';
@@ -33,6 +34,7 @@ document.addEventListener('change', (e) => {
   const el = e.target;
   if (!(el instanceof HTMLElement)) return;
   if (el.dataset.act === 'target') S.summaries[`${S.selId}:target`] = valueOf(el);
+  if (el.dataset.act === 'base-select') chooseBase(valueOf(el));
   if (el.dataset.cfg) {
     const key = el.dataset.cfg;
     const value = el instanceof HTMLInputElement && el.type === 'checkbox' ? el.checked : el instanceof HTMLInputElement && el.type === 'number' ? Number(el.value) : valueOf(el);
@@ -58,6 +60,11 @@ document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && $('#result') && !$('#result')?.dataset.busy) { closeResult(); return; }
   const el = e.target;
   if (!(el instanceof HTMLElement)) return;
+  if (el.dataset.act === 'base-input') {
+    if (e.key === 'Enter') { e.preventDefault(); need<HTMLButtonElement>('[data-act="set-base"]').click(); }
+    if (e.key === 'Escape') { S.baseOther = null; redrawHeaderMeta(); }
+    return;
+  }
   const ek = el.dataset.ek;
   if (!ek || ek === 'summary') return;
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); saveEditor(ek).catch((err) => toast(errMsg(err), true)); }

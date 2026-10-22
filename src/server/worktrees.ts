@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import type { DirtyKind } from '../shared/api.ts';
+import type { BaseChoices, DirtyKind } from '../shared/api.ts';
 import { explainWorktreeError, git, gitError, httpError } from './exec.ts';
 import { discoverRepos } from './repos.ts';
 import { changed, repos, state, wts, wtState } from './state.ts';
@@ -88,9 +88,14 @@ async function detectStackBase(wt: WorktreeRecord, repo: Repo): Promise<string |
 }
 
 function resolveBase(wt: WorktreeRecord): { ref: string; source: string } {
-  const repo = repoOf(wt);
   const s = state.worktrees[wt.id];
   if (s?.baseOverride) return { ref: s.baseOverride, source: 'set by you' };
+  return automaticBase(wt);
+}
+
+/** The base the diff uses unless you pick one: the PR's base, the branch it's stacked on, or the repo default. */
+export function automaticBase(wt: WorktreeRecord): { ref: string; source: string } {
+  const repo = repoOf(wt);
   if (wt.pr?.baseRefName) return { ref: `origin/${wt.pr.baseRefName}`, source: `PR #${wt.pr.number} base` };
   if (wt.stackBase) return { ref: wt.stackBase, source: 'stacked on' };
   return { ref: repo.defaultBase, source: 'default' };
@@ -205,4 +210,12 @@ export async function pollWorktrees(): Promise<void> {
       if (wt.error?.detail !== err.detail) { wt.error = err; changed(); }
     }
   }));
+}
+
+/** What the "Compare with" menu offers: the automatic base, then recently used local and remote branches. */
+export async function baseChoices(wt: WorktreeRecord): Promise<BaseChoices> {
+  const refs = async (prefix: string, n: number) => (await git(wt.path, ['for-each-ref', '--sort=-committerdate', `--count=${n}`, '--format=%(refname:short)', prefix]).catch(() => ''))
+    .split('\n').filter((r) => r && r !== wt.branch && !r.endsWith('/HEAD'));
+  const [branches, remotes] = await Promise.all([refs('refs/heads', 25), refs('refs/remotes', 25)]);
+  return { automatic: automaticBase(wt), current: { ref: wt.baseRef ?? '', source: wt.baseSource ?? '' }, branches, remotes };
 }

@@ -299,6 +299,20 @@ test('the page renders a worktree without errors', { skip: !fs.existsSync(proces
       await page.eval(`location.hash = '${hash}'`);
       assert.ok(await page.waitFor("document.querySelector('#main h1')?.textContent"), hash);
     }
+    // Compare with: the menu lists branches; picking one sets the base, picking automatic resets it.
+    await page.eval(`location.hash = '#/${wt.id}'`);
+    const opts = await page.waitFor<string[]>("document.querySelector('.base-select optgroup') && [...document.querySelectorAll('.base-select option')].map((o) => o.value)");
+    assert.ok(opts.includes('main') && opts.includes('') && opts.includes('__other'), opts.join(','));
+    const pick = (v: string) => page.eval(`(() => { const s = document.querySelector('.base-select'); s.value = ${JSON.stringify(v)}; s.dispatchEvent(new Event('change', { bubbles: true })); })()`);
+    await pick('main');
+    await until(async () => (await wtBy('feat/checkout-discounts')).baseSource === 'set by you', 'the picked base');
+    await page.waitFor("document.querySelector('.base-select')?.value === 'main'");
+    await pick('');
+    await until(async () => (await wtBy('feat/checkout-discounts')).baseSource !== 'set by you', 'the automatic base');
+    await pick('__other');
+    assert.ok(await page.waitFor("document.querySelector('input#base')"), 'free-text ref input');
+    await page.eval("document.querySelector('[data-act=base-other-cancel]').click()");
+    assert.ok(await page.waitFor("document.querySelector('.base-select')"));
     // Opening the dashboard with no worktree chosen goes straight to one to review, not to setup.
     await page.eval(`location.href = '${BASE}/'`);
     assert.match(await page.waitFor<string>("/^#\\/[0-9a-f]{12}$/.test(location.hash) && location.hash"), /^#\/[0-9a-f]{12}$/);
