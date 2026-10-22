@@ -583,10 +583,11 @@ const MAX_DIFF = 30 * 1024 * 1024;
 
 async function branchCommits(wt) {
   // Oldest first, so commit #1 is where the branch starts.
-  return (await git(wt.path, ['log', '--reverse', '--format=%H%x09%ct%x09%an%x09%s', `${wt.mergeBase}..HEAD`]))
-    .split('\n').filter(Boolean).map((l, i) => {
-      const [sha, ct, author, ...subject] = l.split('\t');
-      return { n: i + 1, sha, time: Number(ct) * 1000, author, subject: subject.join('\t') };
+  // Unit/record separators, because commit bodies span several lines.
+  return (await git(wt.path, ['log', '--reverse', '--format=%H%x1f%ct%x1f%an%x1f%s%x1f%b%x1e', `${wt.mergeBase}..HEAD`]))
+    .split('\x1e').map((r) => r.replace(/^\n/, '')).filter(Boolean).map((r, i) => {
+      const [sha, ct, author, subject, body = ''] = r.split('\x1f');
+      return { n: i + 1, sha, time: Number(ct) * 1000, author, subject, body: body.trim() };
     });
 }
 

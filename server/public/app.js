@@ -71,6 +71,7 @@ const S = {
   prevStatus: new Map(),
   page: null,        // 'settings' | 'welcome' | null
   shutCommits: new Set(), // collapsed commit sections in By commit view
+  openBodies: new Set(),  // commit messages expanded past the clamp
   integ: null,       // integrations status from the server
   setupSig: null,
 };
@@ -483,6 +484,7 @@ function renderMain() {
       <div class="commit-head"><button class="caret" data-act="toggle-commit" data-n="${g.n}" aria-expanded="${!shut}" aria-label="${shut ? 'Expand' : 'Collapse'} this commit" title="${shut ? 'Expand' : 'Collapse'} this commit">${shut ? '▸' : '▾'}</button><span class="cnum">${g.n ? `#${g.n}` : '±'}</span>
         <span class="commit-title">${esc(g.subject)}</span>
         <span class="muted small">${g.sha ? `<span class="mono">${g.sha.slice(0, 8)}</span> · ${esc(g.author)} · ${ago(g.time)} · ` : ''}${g.files.length} file${g.files.length === 1 ? '' : 's'}</span></div>
+      ${shut || !g.body ? '' : commitBodyHtml(g)}
       ${shut ? '' : `<div class="commit-files">${g.truncated ? '<div class="callout warn small">This commit is too large to show in full.</div>' : ''}
       ${g.files.map((f) => renderFile(f, byAnchor, used)).join('') || '<div class="file-note">No file changes.</div>'}</div>`}
     </section>`;
@@ -575,16 +577,34 @@ function commitsHtml(commits, wt) {
   if (!commits.length && !wt.dirty) return '';
   const byCommit = S.view?.diff.mode === 'commits';
   const canHl = !byCommit && !!S.view?.blame;
-  const row = (n, sha, subject, time) => `<div class="commit ${S.hl === n && canHl ? 'hl' : ''}">
+  const row = (n, sha, subject, time, body) => `<div class="commit ${S.hl === n && canHl ? 'hl' : ''}" ${body ? `title="${esc(`${subject}\n\n${body}`)}"` : ''}>
       <button class="cswatch ${commitClass(n)}" data-act="hl-commit" data-n="${n}" ${canHl ? '' : 'disabled'} title="${canHl ? 'Highlight the lines from this commit' : byCommit ? '' : 'Working out which lines came from which commit…'}">${n ? `#${n}` : '±'}</button>
       ${sha ? `<span class="mono">${sha.slice(0, 8)}</span>` : ''}<span class="subject">${esc(subject)}</span>
       <span class="when">${time ? ago(time) : ''}</span>
       <button class="link-btn" data-act="view-commit" data-n="${n}">view</button></div>`;
-  const rows = commits.map((c) => row(c.n, c.sha, c.subject, c.time));
+  const rows = commits.map((c) => row(c.n, c.sha, c.subject, c.time, c.body));
   if (wt.dirty) rows.push(row(0, null, `Uncommitted changes (${wt.dirty} file${wt.dirty === 1 ? '' : 's'})`, null));
   return `<details class="panel commits-panel" ${commits.length <= 8 ? 'open' : ''}><summary class="panel-head" style="cursor:pointer">${commits.length} commit${commits.length === 1 ? '' : 's'}, oldest first
       ${S.hl !== null && S.hl !== undefined && canHl ? '<button class="btn small" data-act="hl-commit" data-n="">Clear highlight</button>' : ''}</summary>
     <div class="panel-body">${rows.join('')}</div></details>`;
+}
+
+const TRAILER = /^[A-Z][A-Za-z-]+: .+/;
+function commitBodyHtml(g) {
+  const lines = g.body.split('\n');
+  // Trailers (Co-Authored-By:, Signed-off-by:, Refs:) are the last paragraph of key: value lines.
+  let cut = lines.length;
+  while (cut > 0 && (TRAILER.test(lines[cut - 1]) || !lines[cut - 1].trim())) cut--;
+  const trailerBlock = lines.slice(cut).filter((l) => l.trim());
+  const isTrailers = trailerBlock.length && trailerBlock.every((l) => TRAILER.test(l));
+  const main = (isTrailers ? lines.slice(0, cut) : lines).join('\n').trim();
+  const long = main.split('\n').length > 6 || main.length > 600;
+  const open = S.openBodies.has(g.n);
+  return `<div class="commit-body ${long && !open ? 'clamped' : ''} ${main ? '' : 'trailers-only'}">
+    ${main ? `<div class="commit-msg">${md(main)}</div>` : ''}
+    ${isTrailers ? `<div class="commit-trailers">${trailerBlock.map(esc).join('<br>')}</div>` : ''}
+    ${long ? `<button class="link-btn" data-act="toggle-body" data-n="${g.n}">${open ? 'Show less' : 'Show full message'}</button>` : ''}
+  </div>`;
 }
 
 function applyHighlight() {
@@ -893,6 +913,7 @@ function select(id) {
   S.forceRender.clear();
   S.editors.clear();
   S.shutCommits.clear();
+  S.openBodies.clear();
   S.hl = null;
   $('#main').scrollTop = 0;
   renderSidebar();
@@ -1068,6 +1089,11 @@ const actions = {
     renderMain();
   },
   'expand-all': () => { S.shutCommits.clear(); renderMain(); },
+  'toggle-body': (el) => {
+    const n = Number(el.dataset.n);
+    if (S.openBodies.has(n)) S.openBodies.delete(n); else S.openBodies.add(n);
+    renderMain();
+  },
   'toggle-commit': (el) => {
     const n = Number(el.dataset.n);
     if (S.shutCommits.has(n)) S.shutCommits.delete(n); else S.shutCommits.add(n);
