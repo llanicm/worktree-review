@@ -51,7 +51,8 @@ function activity(wt: WorktreeRecord, name: string, input: Record<string, unknow
   const file = asStr(input.file_path);
   if (name === 'Skill') return 'Starting the review';
   if (name === 'Read' && file) return `Reading ${path.relative(wt.path, path.resolve(wt.path, file))}`;
-  if (name === 'Bash') return `Running ${(asStr(input.command) || '').split('\n')[0]?.slice(0, 80)}`;
+  // Claude describes most commands in a few words; the command itself is too noisy to show.
+  if (name === 'Bash') return asStr(input.description) || 'Running a command';
   if (name === 'Grep' || name === 'Glob') return 'Searching the code';
   if (name === 'Task' || name === 'Agent') return asStr(input.description) || 'Starting a sub-agent';
   if (name === 'StructuredOutput') return 'Writing up findings';

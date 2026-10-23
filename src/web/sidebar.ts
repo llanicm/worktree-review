@@ -1,6 +1,6 @@
 // ---------- sidebar ----------
 import type { AgentRef, PullRequest, Session, SessionRef, Worktree } from '../shared/api.ts';
-import { NAMES, REVIEWERS } from './code-review.ts';
+import { NAMES, REVIEWERS, SEV_ORDER } from './code-review.ts';
 import { renderJobs } from './jobs.ts';
 import { need, S, st } from './state.ts';
 import { ago, esc, md, shortPath } from './util.ts';
@@ -48,9 +48,13 @@ export function agentChip(a: AgentRef) {
 
 function reviewChip(wt: Worktree) {
   const running = REVIEWERS.filter((k) => wt.codeReviews[k]?.status === 'running');
-  if (running.length) return `<span class="chip cr"><span class="dot busy"></span>${running.map((k) => NAMES[k]).join(', ')}</span>`;
-  const open = REVIEWERS.reduce((n, k) => n + (wt.codeReviews[k]?.open || 0), 0);
-  return open ? `<span class="chip cr">${open} finding${open === 1 ? '' : 's'}</span>` : '';
+  if (running.length) return `<span class="chip"><span class="dot busy"></span>${running.map((k) => NAMES[k]).join(', ')} reviewing</span>`;
+  const done = REVIEWERS.filter((k) => wt.codeReviews[k]?.open);
+  const open = done.reduce((n, k) => n + (wt.codeReviews[k]?.open || 0), 0);
+  if (!open) return '';
+  // Coloured by the most serious open finding, like the severity tags on the findings themselves.
+  const worst = SEV_ORDER.find((sev) => done.some((k) => wt.codeReviews[k]?.worst === sev)) || 'none';
+  return `<span class="chip findings ${worst}" title="${open} open finding${open === 1 ? '' : 's'} from ${done.map((k) => NAMES[k]).join(' and ')}; the most serious is ${worst === 'none' ? 'unrated' : worst}">${open} finding${open === 1 ? '' : 's'}</span>`;
 }
 
 function wtItem(wt: Worktree, showNew?: boolean) {
