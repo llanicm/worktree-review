@@ -1,10 +1,18 @@
 {
   "name": "worktree-review",
-  "version": "2.0.5",
+  "version": "2.1.0",
   "description": "A local, GitHub-style review screen for every git worktree Claude is working in. Comment on lines, send the review straight to the session doing the work, and clean up worktrees once their PR merges.",
-  "author": { "name": "John McInall" },
+  "author": {
+    "name": "John McInall"
+  },
   "homepage": "https://github.com/llanicm/worktree-review",
   "repository": "https://github.com/llanicm/worktree-review",
   "license": "MIT",
-  "keywords": ["review", "worktree", "git", "diff", "code-review"]
+  "keywords": [
+    "review",
+    "worktree",
+    "git",
+    "diff",
+    "code-review"
+  ]
 }
