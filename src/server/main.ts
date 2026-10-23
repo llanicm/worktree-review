@@ -13,6 +13,7 @@ import { registerServer } from './jobs.ts';
 import { refreshSessions } from './sessions.ts';
 import { errInfo } from './exec.ts';
 import { log } from './util.ts';
+import { offerReviews } from './wake.ts';
 import { discoverWorktrees, pollWorktrees } from './worktrees.ts';
 
 // ---------- main loop ----------
@@ -38,7 +39,7 @@ server.listen(PORT, '127.0.0.1', async () => {
   refreshSessions();
   getIntegrations().then(changed, () => {});
   void loop(discoverWorktrees, 30_000);
-  void loop(async () => refreshSessions(), 3_000);
+  void loop(async () => { refreshSessions(); offerReviews(); }, 3_000);
   void loop(pollWorktrees, 1_000);
   setTimeout(() => void loop(refreshPRs, () => config.prPollMinutes * 60_000), 5_000);
 });

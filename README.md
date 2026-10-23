@@ -137,7 +137,9 @@ it was given (`isolation: "worktree"`), or one it reaches into the same way. It 
 
 **Delivering reviews.** The plugin adds `UserPromptSubmit` and `Stop` hooks. When you send a review,
 the next of those hooks to fire in the right session hands it to Claude, with the file, line and
-commit of each comment, and how to reply or resolve it.
+commit of each comment, and how to reply or resolve it. A session that is sitting idle doesn't wait
+for your next message: when it stops, the plugin leaves a waiter running in the background (an
+`asyncRewake` hook), and a review sent to it wakes it straight away.
 
 **Removing worktrees safely.**
 

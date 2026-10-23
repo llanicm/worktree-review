@@ -18,6 +18,7 @@ import { removeWorktree, repairWorktrees } from './removal.ts';
 import { claimReviews, getComment, reviewPrompt, submitReview } from './reviews.ts';
 import { refreshSessions } from './sessions.ts';
 import { listDir, updateConfig } from './settings.ts';
+import { offerReviews } from './wake.ts';
 import { changed, save, state, wts, wtState } from './state.ts';
 import { log, newId } from './util.ts';
 import { baseChoices, getWt, refreshWorktree } from './worktrees.ts';
@@ -83,7 +84,11 @@ export const routes: Route[] = [
     save();
     return { ok: true };
   }],
-  ['POST', /^\/api\/worktrees\/(\w+)\/submit$/, (m, raw) => submitReview(getWt(arg(m)), bodyOf<{ summary?: string; targetSession?: string }>(raw))],
+  ['POST', /^\/api\/worktrees\/(\w+)\/submit$/, (m, raw) => {
+    const review = submitReview(getWt(arg(m)), bodyOf<{ summary?: string; targetSession?: string }>(raw));
+    offerReviews(); // an idle session waiting for it takes it now, and the reply says so
+    return review;
+  }],
   ['POST', /^\/api\/worktrees\/(\w+)\/remove$/, (m, raw) => {
     const body = bodyOf<{ force?: unknown }>(raw);
     const wt = getWt(arg(m));
