@@ -243,15 +243,47 @@ function parseKey(k) {
 }
 var sameCommit = (a, b) => (a || null) === (b || null);
 
-// src/web/coderabbit.ts
+// src/web/code-review.ts
 var SEV_ORDER = ["critical", "major", "minor", "trivial", "info", "none"];
-function crButtonHtml(wt) {
-  if (!st().coderabbitReady) return '<a class="btn" href="#/settings" title="Connect CodeRabbit in Settings">Set up CodeRabbit</a>';
-  if (wt.coderabbit?.status === "running") {
-    return `<span class="cr-running"><span class="dot busy"></span>CodeRabbit reviewing <span class="cr-elapsed" data-start="${wt.coderabbit.startedAt}">${elapsed(wt.coderabbit.startedAt)}</span></span>
-      <button class="btn small" data-act="cr-cancel">Cancel</button>`;
-  }
-  return `<button class="btn cr-btn" data-act="cr-run" title="Ask CodeRabbit to review these changes (uses one of your hourly CodeRabbit reviews)">Run CodeRabbit</button>`;
+var REVIEWERS = ["coderabbit", "claude"];
+var NAMES = { coderabbit: "CodeRabbit", claude: "Claude" };
+var EFFORTS = [["low", "Low (quickest)"], ["medium", "Medium"], ["high", "High"], ["xhigh", "Extra high"], ["max", "Max (most thorough)"]];
+var ready = (k) => k === "coderabbit" ? st().coderabbitReady : st().claudeReady;
+var reviewsSig = (wt) => REVIEWERS.map((k) => wt.codeReviews[k]?.sig || "").join();
+var findingsOf = (v) => REVIEWERS.flatMap((k) => v.codeReviews?.[k]?.findings || []);
+function reviewPick(wt) {
+  const idle = REVIEWERS.filter((k) => ready(k) && wt.codeReviews[k]?.status !== "running");
+  const p = S.reviewPick;
+  const reviewer = p && idle.includes(p.reviewer) ? p.reviewer : idle[0] ?? "claude";
+  return { reviewer, effort: p?.effort || st().config.reviewEffort };
+}
+function runningHtml(wt, k) {
+  const r = wt.codeReviews[k];
+  if (r?.status !== "running") return "";
+  return `<span class="cr-running ${k}"><span class="dot busy"></span>${NAMES[k]} reviewing <span class="cr-elapsed" data-start="${r.startedAt}">${elapsed(r.startedAt)}</span></span>
+    <button class="btn small" data-act="review-cancel" data-reviewer="${k}">Cancel</button>`;
+}
+function menuHtml(wt, idle) {
+  const pick = reviewPick(wt);
+  const choice = (k, note) => `<label class="choice"><input type="radio" name="reviewer" data-review="reviewer" value="${k}" ${pick.reviewer === k ? "checked" : ""}>
+    <span><strong>${NAMES[k]}</strong><br><span class="muted small">${note}</span></span></label>`;
+  return `<div class="review-menu" role="dialog" aria-label="Run code review">
+    ${idle.length > 1 ? `<div class="review-menu-title">Who should review?</div>
+      ${choice("coderabbit", "The CodeRabbit CLI. Uses one of your hourly CodeRabbit reviews.")}
+      ${choice("claude", "Claude Code's built-in /code-review, run on this machine.")}` : ""}
+    ${pick.reviewer === "claude" ? `<label class="setting row"><span>Effort</span>
+      <select data-review="effort">${EFFORTS.map(([v, l]) => `<option value="${v}" ${pick.effort === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+      <p class="muted small">Higher effort looks harder, takes longer and uses more of your Claude usage. The default is in Settings.</p>` : ""}
+    <div class="actions"><button class="btn small" data-act="review-menu">Cancel</button><button class="btn small primary" data-act="review-start">Start review</button></div>
+  </div>`;
+}
+function reviewButtonHtml(wt) {
+  const running = REVIEWERS.map((k) => runningHtml(wt, k)).join("");
+  if (!REVIEWERS.some(ready)) return '<a class="btn" href="#/settings" title="Connect CodeRabbit or Claude in Settings">Set up code review</a>';
+  const idle = REVIEWERS.filter((k) => ready(k) && wt.codeReviews[k]?.status !== "running");
+  if (!idle.length) return running;
+  const button = idle.length === 1 && idle[0] === "coderabbit" ? '<button class="btn" data-act="review-start" title="Ask CodeRabbit to review these changes (uses one of your hourly CodeRabbit reviews)">Run code review</button>' : `<button class="btn" data-act="review-menu" aria-expanded="${S.reviewMenu === wt.id}">Run code review</button>`;
+  return `${running}<span class="review-run">${button}${S.reviewMenu === wt.id ? menuHtml(wt, idle) : ""}</span>`;
 }
 function findingHtml(f, inline = false) {
   const loc = f.file ? `${f.file}${f.startLine ? `:${f.startLine}${f.endLine && f.endLine !== f.startLine ? `–${f.endLine}` : ""}` : ""}` : "";
@@ -261,44 +293,50 @@ function findingHtml(f, inline = false) {
     f.suggestions ? `<details><summary>Suggested change</summary><pre class="suggestion">${esc(f.suggestions)}</pre></details>` : "",
     f.codegen && f.codegen !== f.comment ? `<details><summary>Fix guidance for agents</summary><div class="msg-body">${md(f.codegen)}</div></details>` : ""
   ].join("");
-  return `<div class="thread cr-finding ${f.status}">
-    <div class="msg"><div class="msg-head"><strong class="cr-name">CodeRabbit</strong><span class="sev ${esc(f.severity)}">${esc(f.severity)}</span>
+  return `<div class="thread cr-finding ${f.source} ${f.status}">
+    <div class="msg"><div class="msg-head"><strong class="cr-name">${NAMES[f.source]}</strong><span class="sev ${esc(f.severity)}">${esc(f.severity)}</span>
       ${!inline && loc ? `<a href="#" class="mono" data-act="cr-jump" data-file="${esc(f.file)}" data-line="${f.endLine || f.startLine || ""}">${esc(loc)}</a>` : ""}</div>
       ${f.title ? `<div class="cr-title">${md(f.title)}</div>` : ""}
       ${f.status === "open" || !inline ? detail : ""}</div>
     <div class="thread-actions">${acts}</div></div>`;
 }
-function crPanelHtml(wt) {
-  const r = S.view?.cr;
-  if (!r) return "";
+function panelHtml(wt, r) {
+  const name = NAMES[r.reviewer];
   const findings = [...r.findings].sort((a, b) => SEV_ORDER.indexOf(a.severity) - SEV_ORDER.indexOf(b.severity));
   const open = findings.filter((f) => f.status === "open");
   const stale = r.status !== "running" && r.fingerprint && r.fingerprint !== wt.fingerprint;
   let head, body = "";
   if (r.status === "running") {
-    head = `CodeRabbit is reviewing against <code>${esc(r.baseRef)}</code>`;
-    body = `<p class="muted">Reviews usually take 2–6 minutes and can take 15 or more. You can leave this page; findings appear here and inline as they arrive.</p>`;
+    head = `${name} is reviewing against <code>${esc(r.baseRef)}</code>`;
+    body = r.reviewer === "coderabbit" ? `<p class="muted">Reviews usually take 2–6 minutes and can take 15 or more. You can leave this page; findings appear here and inline as they arrive.</p>` : `<p class="muted">${r.message ? `${esc(r.message)}…` : "Starting…"}</p><p class="muted">Findings appear here and inline when it's done. You can leave this page.</p>`;
   } else if (r.status === "done") {
-    head = `CodeRabbit · ${findings.length ? `${open.length} open of ${findings.length} finding${findings.length === 1 ? "" : "s"}` : "no findings"}`;
-    if (!findings.length) body = `<p class="muted">Reviewed ${r.reviewedFiles.length} file${r.reviewedFiles.length === 1 ? "" : "s"} and found nothing to flag.</p>`;
+    head = `${name} · ${findings.length ? `${open.length} open of ${findings.length} finding${findings.length === 1 ? "" : "s"}` : "no findings"}`;
+    if (!findings.length) body = `<p class="muted">${r.reviewedFiles.length ? `Reviewed ${r.reviewedFiles.length} file${r.reviewedFiles.length === 1 ? "" : "s"} and found` : "Found"} nothing to flag.</p>`;
   } else {
-    head = `CodeRabbit review ${r.status === "cancelled" ? "cancelled" : "failed"}`;
+    head = `${name} review ${r.status === "cancelled" ? "cancelled" : "failed"}`;
     body = `<p class="error">${esc(r.error || "Something went wrong.")}</p>`;
   }
-  const meta = `<span class="muted small">${r.status === "running" ? `started ${ago(r.startedAt)}` : `${ago(r.finishedAt || r.startedAt)}`}${r.usage ? ` · ${r.usage.remaining} of ${r.usage.limit} reviews left this hour` : ""}</span>`;
-  return `<div class="panel cr-panel">
-    <div class="panel-head"><span>${head}</span><span class="actions">${meta}${open.length > 1 ? '<button class="btn small" data-act="cr-send-all">Send all to Claude</button>' : ""}</span></div>
+  const facts = [r.status === "running" ? `started ${ago(r.startedAt)}` : ago(r.finishedAt || r.startedAt)];
+  if (r.usage) facts.push(`${r.usage.remaining} of ${r.usage.limit} reviews left this hour`);
+  if (r.effort) facts.push(`${r.effort} effort`);
+  if (r.costUsd) facts.push(`<span title="As Claude Code reports it. On a Claude plan this counts toward your usage rather than being billed.">$${r.costUsd.toFixed(2)}</span>`);
+  return `<div class="panel cr-panel ${r.reviewer}">
+    <div class="panel-head"><span>${head}</span><span class="actions"><span class="muted small">${facts.join(" · ")}</span>${open.length > 1 ? `<button class="btn small" data-act="cr-send-all" data-reviewer="${r.reviewer}">Send all to Claude</button>` : ""}</span></div>
     <div class="panel-body">
-      ${stale ? '<div class="callout warn small">The code has changed since this review. Line numbers may be off; run CodeRabbit again for a fresh look.</div>' : ""}
+      ${stale ? `<div class="callout warn small">The code has changed since this review. Line numbers may be off; run ${name} again for a fresh look.</div>` : ""}
       ${body}
       <div class="threads cr-list">${findings.map((f) => findingHtml(f)).join("")}</div>
     </div></div>`;
+}
+function reviewPanelsHtml(wt) {
+  const panels = REVIEWERS.map((k) => S.view?.codeReviews?.[k]).filter((r) => !!r).map((r) => panelHtml(wt, r));
+  return panels.length ? `<div class="cr-panels">${panels.join("")}</div>` : "";
 }
 function indexFindings() {
   const v = view();
   const byAnchor2 = /* @__PURE__ */ new Map();
   v.crByAnchor = byAnchor2;
-  for (const f of v.cr?.findings || []) {
+  for (const f of findingsOf(v)) {
     if (f.status !== "open" || !f.file) continue;
     const k = keyOf(f.file, "new", f.endLine || f.startLine);
     const here = byAnchor2.get(k);
@@ -306,11 +344,11 @@ function indexFindings() {
     else byAnchor2.set(k, [f]);
   }
 }
-async function loadCodeRabbit() {
+async function loadCodeReviews() {
   if (!S.view) return;
   try {
-    const { review } = await api("GET", `/api/worktrees/${S.view.wtId}/coderabbit`);
-    S.view.cr = review;
+    const { reviews } = await api("GET", `/api/worktrees/${S.view.wtId}/code-reviews`);
+    S.view.codeReviews = reviews;
     indexFindings();
   } catch {
   }
@@ -414,7 +452,7 @@ function renderFile(f, byAnchor2) {
   const shown = shownKeys(f);
   const mine = (v.comments || []).filter((c) => c.file === f.path && sameCommit(c.commit, f.commit) && c.status !== "resolved");
   const outsideComments = mine.filter((c) => !shown.has(keyOf(c.file, c.side, c.line, c.commit)));
-  const fileFindings = f.commit ? [] : (v.cr?.findings || []).filter((x) => x.file === f.path && x.status === "open");
+  const fileFindings = f.commit ? [] : findingsOf(v).filter((x) => x.file === f.path && x.status === "open");
   const outsideFindings = fileFindings.filter((x) => !shown.has(keyOf(x.file, "new", x.endLine || x.startLine)));
   const nOpen = mine.length + fileFindings.length;
   const touched = !f.commit ? fileCommitsOf(f.path) : [];
@@ -655,6 +693,12 @@ function prChip(pr) {
 function sessionChip(s) {
   return `<span class="chip" title="Claude session ${esc(s.name)} is ${esc(s.status)}"><span class="dot ${esc(s.status)}"></span>${esc(s.name)}</span>`;
 }
+function reviewChip(wt) {
+  const running = REVIEWERS.filter((k) => wt.codeReviews[k]?.status === "running");
+  if (running.length) return `<span class="chip cr"><span class="dot busy"></span>${running.map((k) => NAMES[k]).join(", ")}</span>`;
+  const open = REVIEWERS.reduce((n, k) => n + (wt.codeReviews[k]?.open || 0), 0);
+  return open ? `<span class="chip cr">${open} finding${open === 1 ? "" : "s"}</span>` : "";
+}
 function wtItem(wt, showNew) {
   const name = wt.branch || `detached @ ${wt.head?.slice(0, 8) || "?"}`;
   const c = wt.comments;
@@ -673,7 +717,7 @@ function wtItem(wt, showNew) {
       ${nComments ? `<span class="chip comments">${nComments} comment${nComments === 1 ? "" : "s"}</span>` : ""}
       ${wt.busy ? '<span class="chip busy-chip"><span class="dot busy"></span>removing…</span>' : ""}
       ${wt.error ? `<span class="chip closed" title="${esc(wt.error.message)}">${wt.error.kind === "broken-link" ? "broken link" : "can't read"}</span>` : wt.dirtyKind === "lockfile-only" ? '<span class="chip" title="Only a lockfile changed">lockfile changed</span>' : wt.dirtyKind === "deleted-only" ? `<span class="chip" title="Tracked files missing from disk; nothing is lost">${wt.dirty} missing</span>` : wt.dirty ? `<span class="chip" title="Uncommitted changes">${wt.dirty} uncommitted</span>` : ""}
-      ${wt.coderabbit?.status === "running" ? '<span class="chip cr"><span class="dot busy"></span>CodeRabbit</span>' : wt.coderabbit?.open ? `<span class="chip cr">${wt.coderabbit.open} finding${wt.coderabbit.open === 1 ? "" : "s"}</span>` : ""}
+      ${reviewChip(wt)}
     </div>
   </a>`;
 }
@@ -815,6 +859,7 @@ function foldersHtml() {
     </div>
   </div>`;
 }
+var EFFORT_OPTIONS = [["low", "Low (quickest)"], ["medium", "Medium"], ["high", "High"], ["xhigh", "Extra high"], ["max", "Max (most thorough)"]];
 var EDITOR_OPTIONS = [["vscode", "VS Code"], ["cursor", "Cursor"], ["windsurf", "Windsurf"], ["zed", "Zed"], ["none", "No editor links"]];
 function setupHtml(mode) {
   const state = st();
@@ -875,6 +920,11 @@ function setupHtml(mode) {
       ${welcome ? "" : '<div class="actions"><button class="btn small" data-act="cr-logout">Sign out</button></div>'}`;
   }
   steps.push(stepHtml(crIcon, 'CodeRabbit <span class="muted small">optional</span>', crBody));
+  const cli = I?.claude.cliVersion;
+  steps.push(stepHtml(!I ? ICON_WAIT : cli ? ICON_OK : ICON_OPT, 'Code review by Claude <span class="muted small">optional</span>', !I ? '<p class="muted">Checking…</p>' : cli ? `<p>Claude can review a worktree with Claude Code's built-in <code>/code-review</code> (claude ${esc(cli)}). It runs on this machine as a separate, read-only session and counts toward your Claude usage.</p>
+      <label class="setting row"><span>Effort to start with</span>
+        <select data-cfg="reviewEffort">${EFFORT_OPTIONS.map(([v, l]) => `<option value="${v}" ${c.reviewEffort === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+      <p class="muted">You can pick a different effort each time you run a review. Higher effort looks harder and takes longer.</p>` : `<p>The <code>claude</code> command wasn't found on this server's PATH, so Claude can't run code reviews here. Make sure it's on your PATH, then <button class="link-btn" data-act="recheck">check again</button>.</p>`));
   const notif = !("Notification" in window) ? "unsupported" : Notification.permission;
   steps.push(stepHtml(ICON_OK, "Preferences", `
     <label class="setting row"><span>Open files in</span>
@@ -943,7 +993,7 @@ async function loadView({ quiet = false } = {}) {
       files = parseDiff(diff.diff).map((f) => ({ ...f, commit: null, uid: f.path })).map((f, i) => ({ f, i, k: first(f.path) })).sort((a, b) => a.k - b.k || a.i - b.i).map((x) => x.f);
     }
     const prev = S.view;
-    const v = { wtId: wt.id, diff, files, groups, comments: cm.comments, reviews: cm.reviews, commentSig: wt.comments.sig, crSig: wt.coderabbit?.sig, blame: prev?.wtId === wt.id && prev.blame?.fingerprint === diff.fingerprint ? prev.blame : null };
+    const v = { wtId: wt.id, diff, files, groups, comments: cm.comments, reviews: cm.reviews, commentSig: wt.comments.sig, crSig: reviewsSig(wt), blame: prev?.wtId === wt.id && prev.blame?.fingerprint === diff.fingerprint ? prev.blame : null };
     S.view = v;
     if (diff.mode !== "commits" && !v.blame && diff.commits.length) {
       api("GET", `/api/worktrees/${wt.id}/blame`).then((b) => {
@@ -953,7 +1003,7 @@ async function loadView({ quiet = false } = {}) {
       }, () => {
       });
     }
-    await loadCodeRabbit();
+    await loadCodeReviews();
     if (seq !== S.seq) return;
     S.stale = false;
     renderMain();
@@ -1197,12 +1247,12 @@ function renderMain() {
       </div>
       <div class="actions">
         ${S.stale ? '<span class="banner">New changes landed. <button class="btn small" data-act="refresh">Refresh</button></span>' : ""}
-        ${crButtonHtml(wt)}
+        ${reviewButtonHtml(wt)}
         ${collapseAllHtml(v)}
         <button class="btn" data-act="mark-reviewed" title="Remember this exact state so you can see only what changes next">Mark as reviewed</button>
       </div>
     </div>
-    ${crPanelHtml(wt)}
+    ${reviewPanelsHtml(wt)}
     ${v.diff.mode !== "commits" && v.diff.truncated ? '<div class="callout warn">This diff is very large and was cut off.</div>' : ""}
     ${orphanPanel}
     ${otherViewHtml(otherView, byCommit)}
@@ -1371,7 +1421,7 @@ function syncOrphan(page, v) {
   const html = orphanHtml(unplacedComments(v).orphan);
   if (html === v.orphanHtml) return true;
   v.orphanHtml = html;
-  const cur = page.querySelector(":scope > div.panel:not(.cr-panel)");
+  const cur = page.querySelector(":scope > div.panel");
   if (cur) {
     if (html) {
       replaceWith(cur, html);
@@ -1390,7 +1440,7 @@ function syncOrphan(page, v) {
   if (!toolbar) return false;
   let prev = toolbar, slot = -1;
   let next = prev.nextElementSibling;
-  if (next?.matches(".cr-panel")) {
+  if (next?.matches(".cr-panels")) {
     prev = next;
     slot = 0;
     next = next.nextElementSibling;
@@ -1891,36 +1941,47 @@ Their folders are deleted. ${merged ? `${merged} merged branch${merged === 1 ? "
     S.showCleaned = !S.showCleaned;
     renderSidebar();
   },
-  "cr-run": async () => {
-    const r = await api("POST", `/api/worktrees/${S.selId}/coderabbit`);
-    view().cr = r;
-    indexFindings();
-    toast("CodeRabbit started. This usually takes a few minutes.");
+  "review-menu": () => {
+    S.reviewMenu = S.reviewMenu === S.selId ? null : S.selId;
+    if (S.reviewMenu && S.reviewPick) S.reviewPick = { ...S.reviewPick, effort: null };
     renderMain();
   },
-  "cr-cancel": async () => {
-    if (!confirm("Cancel this CodeRabbit review? Its progress is thrown away.")) return;
-    await api("POST", `/api/worktrees/${S.selId}/coderabbit/cancel`);
+  "review-start": async () => {
+    const wt = curWt();
+    if (!wt) return;
+    const { reviewer, effort } = reviewPick(wt);
+    const body = reviewer === "claude" ? { reviewer, effort } : { reviewer };
+    const r = await api("POST", `/api/worktrees/${wt.id}/code-review`, body);
+    S.reviewMenu = null;
+    (view().codeReviews ??= {})[reviewer] = r;
+    indexFindings();
+    toast(reviewer === "coderabbit" ? "CodeRabbit started. This usually takes a few minutes." : `Claude started a ${effort}-effort review.`);
+    renderMain();
+  },
+  "review-cancel": async (el) => {
+    const reviewer = attr(el, "reviewer");
+    if (!confirm(`Cancel this ${NAMES[reviewer]} review? Its progress is thrown away.`)) return;
+    await api("POST", `/api/worktrees/${S.selId}/code-review/${reviewer}/cancel`);
   },
   "cr-send": async (el) => {
     await api("POST", `/api/findings/${attr(el, "id")}/send`);
-    await loadCodeRabbit();
+    await loadCodeReviews();
     await reloadComments();
   },
   "cr-dismiss": async (el) => {
     await api("POST", `/api/findings/${attr(el, "id")}/dismiss`);
-    await loadCodeRabbit();
+    await loadCodeReviews();
     renderMain();
   },
   "cr-restore": async (el) => {
     await api("POST", `/api/findings/${attr(el, "id")}/restore`);
-    await loadCodeRabbit();
+    await loadCodeReviews();
     renderMain();
   },
-  "cr-send-all": async () => {
-    const { sent } = await api("POST", `/api/worktrees/${S.selId}/coderabbit/send-all`);
+  "cr-send-all": async (el) => {
+    const { sent } = await api("POST", `/api/worktrees/${S.selId}/code-review/${attr(el, "reviewer")}/send-all`);
     toast(`Added ${sent} finding${sent === 1 ? "" : "s"} to your review as drafts`);
-    await loadCodeRabbit();
+    await loadCodeReviews();
     await reloadComments();
   },
   "cr-jump": (el, e) => {
@@ -2016,16 +2077,18 @@ function maybeNotify(st2) {
   }
   S.prevStatus = new Map(st2.sessions.map((s) => [s.sessionId, s.status]));
   for (const w of st2.worktrees) {
-    const prev = S.prevCr?.get(w.id);
-    if (prev === "running" && w.coderabbit && w.coderabbit.status !== "running") {
-      const n = new Notification(`CodeRabbit finished on ${w.branch || "a worktree"}`, { body: w.coderabbit.total ? `${w.coderabbit.total} finding${w.coderabbit.total === 1 ? "" : "s"}` : "No findings", tag: `cr-${w.id}` });
-      n.onclick = () => {
-        window.focus();
-        location.hash = `#/${w.id}`;
-      };
+    for (const k of REVIEWERS) {
+      const r = w.codeReviews[k];
+      if (S.prevCr?.get(`${w.id} ${k}`) === "running" && r && r.status !== "running") {
+        const n = new Notification(`${NAMES[k]} finished reviewing ${w.branch || "a worktree"}`, { body: r.total ? `${r.total} finding${r.total === 1 ? "" : "s"}` : "No findings", tag: `cr-${w.id}-${k}` });
+        n.onclick = () => {
+          window.focus();
+          location.hash = `#/${w.id}`;
+        };
+      }
     }
   }
-  S.prevCr = new Map(st2.worktrees.map((w) => [w.id, w.coderabbit?.status]));
+  S.prevCr = new Map(st2.worktrees.flatMap((w) => REVIEWERS.map((k) => [`${w.id} ${k}`, w.codeReviews[k]?.status])));
 }
 function onState(st2) {
   if (S.st && st2.version !== S.st.version) {
@@ -2063,16 +2126,18 @@ function onState(st2) {
       S.stale = true;
       renderMain();
     } else loadView({ quiet: true });
-  } else if ((wt.coderabbit?.sig || null) !== (v.crSig || null)) {
-    const was = v.cr?.status;
-    v.crSig = wt.coderabbit?.sig;
-    loadCodeRabbit().then(() => {
+  } else if (reviewsSig(wt) !== v.crSig) {
+    const was = REVIEWERS.map((k) => v.codeReviews?.[k]?.status);
+    v.crSig = reviewsSig(wt);
+    loadCodeReviews().then(() => {
       const cur = S.view;
       if (!cur) return;
-      if (was === "running" && cur.cr && cur.cr.status !== "running") {
-        const n = cur.cr.findings.length;
-        toast(cur.cr.status === "done" ? `CodeRabbit finished: ${n ? `${n} finding${n === 1 ? "" : "s"}` : "no findings"}` : "CodeRabbit review stopped", cur.cr.status === "failed");
-      }
+      REVIEWERS.forEach((k, i) => {
+        const r = cur.codeReviews?.[k];
+        if (was[i] !== "running" || !r || r.status === "running") return;
+        const n = r.findings.length;
+        toast(r.status === "done" ? `${NAMES[k]} finished: ${n ? `${n} finding${n === 1 ? "" : "s"}` : "no findings"}` : `${NAMES[k]} review stopped`, r.status === "failed");
+      });
       if (wt.comments.sig !== cur.commentSig) {
         cur.commentSig = wt.comments.sig;
         reloadComments();
@@ -2122,6 +2187,10 @@ setInterval(() => {
 document.addEventListener("click", (e) => {
   const target = e.target;
   if (!(target instanceof Element)) return;
+  if (S.reviewMenu && !target.closest(".review-run")) {
+    S.reviewMenu = null;
+    renderMain();
+  }
   const el = target.closest("[data-act]");
   if (!el || el.tagName === "SELECT" || el instanceof HTMLInputElement && el.type === "checkbox" && e.type === "click" && !["viewed", "auto-cleanup", "picker-hidden", "clean-pick"].includes(el.dataset.act ?? "")) return;
   const fn = actions[el.dataset.act ?? ""];
@@ -2134,6 +2203,13 @@ document.addEventListener("change", (e) => {
   if (!(el instanceof HTMLElement)) return;
   if (el.dataset.act === "target") S.summaries[`${S.selId}:target`] = valueOf(el);
   if (el.dataset.act === "base-select") chooseBase(valueOf(el));
+  if (el.dataset.review) {
+    const wt = curWt();
+    if (!wt) return;
+    const pick = reviewPick(wt);
+    S.reviewPick = el.dataset.review === "reviewer" ? { ...pick, reviewer: valueOf(el) } : { ...pick, effort: valueOf(el) };
+    renderMain();
+  }
   if (el.dataset.cfg) {
     const key = el.dataset.cfg;
     const value = el instanceof HTMLInputElement && el.type === "checkbox" ? el.checked : el instanceof HTMLInputElement && el.type === "number" ? Number(el.value) : valueOf(el);
@@ -2163,6 +2239,11 @@ document.addEventListener("keydown", (e) => {
   }
   if (e.key === "Escape" && $("#result") && !$("#result")?.dataset.busy) {
     closeResult();
+    return;
+  }
+  if (e.key === "Escape" && S.reviewMenu) {
+    S.reviewMenu = null;
+    renderMain();
     return;
   }
   const el = e.target;
