@@ -1,9 +1,9 @@
 import path from 'node:path';
 import type { CodeReview, Finding, ReviewEffort } from '../shared/api.ts';
-import { addSnippet, assertIdle, beginReview, runReview } from './code-review.ts';
+import { addSnippet, assertIdle, beginReview, runReview, startInBackground } from './code-review.ts';
 import { config, isEffort } from './config.ts';
 import { httpError } from './exec.ts';
-import { claudeBin, getIntegrations } from './integrations.ts';
+import { claudeBin, claudeReady, getIntegrations } from './integrations.ts';
 import type { WorktreeRecord } from './types.ts';
 import { asStr, newId, rec } from './util.ts';
 import { refreshWorktree } from './worktrees.ts';
@@ -78,15 +78,19 @@ function toFinding(wt: WorktreeRecord, v: unknown): Finding {
   };
 }
 
-export async function startClaudeReview(wt: WorktreeRecord, effort: ReviewEffort = config.reviewEffort): Promise<CodeReview> {
+export function startClaudeReview(wt: WorktreeRecord, effort: ReviewEffort = config.reviewEffort): CodeReview {
   assertIdle(wt, 'claude');
   if (!isEffort(effort)) throw httpError(400, `Unknown effort: ${String(effort)}`);
-  const integ = await getIntegrations();
-  if (!integ.claude.cliVersion) throw httpError(409, 'The claude CLI was not found. See Settings.');
-  await refreshWorktree(wt);
-  const base = wt.baseRef;
-  if (!base) throw httpError(409, 'This worktree has nothing to compare with yet.');
-  const review = beginReview(wt, 'claude', { effort, costUsd: null });
+  const review = beginReview(wt, 'claude', { effort, costUsd: null, message: 'Starting' });
+  startInBackground(wt, review, async () => {
+    if (!claudeReady() && !(await getIntegrations()).claude.cliVersion) throw httpError(409, 'The claude CLI was not found. See Settings.');
+    await refreshWorktree(wt);
+    if (!wt.baseRef) throw httpError(409, 'This worktree has nothing to compare with yet.');
+  }, () => runClaude(wt, review, effort, wt.baseRef ?? ''));
+  return review;
+}
+
+function runClaude(wt: WorktreeRecord, review: CodeReview, effort: ReviewEffort, base: string): void {
   let reported = false;
   runReview(wt, review, claudeBin(), [
     '-p', prompt(base),
@@ -117,5 +121,4 @@ export async function startClaudeReview(wt: WorktreeRecord, effort: ReviewEffort
     },
     finish: () => { if (!reported) review.error ||= 'Claude exited without a result.'; },
   });
-  return review;
 }

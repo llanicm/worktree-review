@@ -127,13 +127,11 @@ function panelHtml(wt: Worktree, r: CodeReview) {
   const name = NAMES[r.reviewer];
   const findings = [...r.findings].sort((a, b) => SEV_ORDER.indexOf(a.severity) - SEV_ORDER.indexOf(b.severity));
   const open = findings.filter((f) => f.status === 'open');
-  const stale = r.status !== 'running' && r.fingerprint && r.fingerprint !== wt.fingerprint;
+  const stale = wt.codeReviews[r.reviewer]?.stale;
   let head, body = '';
   if (r.status === 'running') {
     head = `${name} is reviewing against <code>${esc(r.baseRef)}</code>`;
-    const note = r.reviewer === 'coderabbit'
-      ? 'Reviews usually take 2–6 minutes and can take 15 or more.'
-      : r.message ? `${esc(r.message)}…` : 'Starting…';
+    const note = `${r.message ? `${esc(r.message)}… ` : ''}${r.reviewer === 'coderabbit' ? '<span class="muted">Reviews usually take 2–6 minutes and can take 15 or more.</span>' : ''}`;
     body = `<div class="cr-working">${scanHtml(r)}<div><p>${note}</p><p class="muted">${findings.length ? `${findings.length} finding${findings.length === 1 ? '' : 's'} so far. ` : ''}They show in the code as they arrive. You can leave this page.</p></div></div>`;
   } else if (r.status === 'done') {
     head = `${name} · ${findings.length ? `${open.length} open of ${findings.length} finding${findings.length === 1 ? '' : 's'}` : 'no findings'}`;

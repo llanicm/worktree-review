@@ -1,7 +1,7 @@
 import type { CodeRabbitUsage, CodeReview, Finding } from '../shared/api.ts';
-import { addSnippet, assertIdle, beginReview, runReview } from './code-review.ts';
+import { addSnippet, assertIdle, beginReview, runReview, startInBackground } from './code-review.ts';
 import { httpError } from './exec.ts';
-import { getIntegrations, lastJson, probe } from './integrations.ts';
+import { coderabbitReady, getIntegrations, lastJson, probe } from './integrations.ts';
 import type { WorktreeRecord } from './types.ts';
 import { asStr, isStringArray, newId, rec } from './util.ts';
 import { refreshWorktree } from './worktrees.ts';
@@ -46,17 +46,25 @@ function toFinding(ev: Record<string, unknown>): Finding {
   };
 }
 
-export async function startCodeRabbit(wt: WorktreeRecord): Promise<CodeReview> {
+export function startCodeRabbit(wt: WorktreeRecord): CodeReview {
   assertIdle(wt, 'coderabbit');
-  const integ = await getIntegrations();
-  if (!integ.coderabbit.installed) throw httpError(409, 'The CodeRabbit CLI is not installed. See Settings.');
-  if (!integ.coderabbit.authed) throw httpError(409, 'Sign in to CodeRabbit in Settings first.');
-  await refreshWorktree(wt);
-  const usage = await crUsage(wt);
-  if (usage && usage.remaining <= 0) {
-    throw httpError(429, `No CodeRabbit reviews left for ${usage.repository} this hour. Try again in about ${Math.ceil(usage.fullInMs / 60000)} minutes.`);
-  }
-  const review = beginReview(wt, 'coderabbit', { usage: usage ? { ...usage, remaining: Math.max(0, usage.remaining - 1) } : null });
+  const review = beginReview(wt, 'coderabbit', { message: 'Checking how many CodeRabbit reviews you have left' });
+  startInBackground(wt, review, async () => {
+    const integ = coderabbitReady() ? null : await getIntegrations();
+    if (integ && !integ.coderabbit.installed) throw httpError(409, 'The CodeRabbit CLI is not installed. See Settings.');
+    if (integ && !integ.coderabbit.authed) throw httpError(409, 'Sign in to CodeRabbit in Settings first.');
+    await refreshWorktree(wt);
+    const usage = await crUsage(wt);
+    if (usage && usage.remaining <= 0) {
+      throw httpError(429, `No CodeRabbit reviews left for ${usage.repository} this hour. Try again in about ${Math.ceil(usage.fullInMs / 60000)} minutes.`);
+    }
+    review.usage = usage ? { ...usage, remaining: Math.max(0, usage.remaining - 1) } : null;
+    review.message = 'Starting';
+  }, () => runCodeRabbit(wt, review));
+  return review;
+}
+
+function runCodeRabbit(wt: WorktreeRecord, review: CodeReview): void {
   runReview(wt, review, 'coderabbit', ['review', '--agent', '--base', wt.baseRef ?? '', '--include-untracked'], {
     onEvent: (ev) => {
       if (ev.type === 'finding') review.findings.push(addSnippet(wt, toFinding(ev)));
@@ -65,5 +73,4 @@ export async function startCodeRabbit(wt: WorktreeRecord): Promise<CodeReview> {
       else if (ev.type === 'status' && ev.message) review.message = asStr(ev.message);
     },
   });
-  return review;
 }

@@ -337,7 +337,11 @@ else if (args[0] === 'auth' && args[1] === 'status') {
   if (args.includes('--agent')) out({ authenticated: true, user: { username: 'sam-rivera', email: 'sam@example.com' }, currentOrg: { name: 'acme' }, organizations: [{ name: 'acme' }] });
   else out('Plan: Pro\\nSeat: assigned');
 } else if (args[0] === 'usage') {
-  out({ includedReviews: { state: 'available', limit: 8, remaining: 6, fullCapacityInMs: 1_800_000, rollingWindowMs: 3_600_000, repository: 'acme/shop' } });
+  // A test can make the allowance slow to check, or used up: {"ms": 1500, "remaining": 0} in ~/.cr-usage.json.
+  let o = {};
+  try { o = JSON.parse(require('fs').readFileSync(require('path').join(process.env.HOME, '.cr-usage.json'), 'utf8')); } catch {}
+  await sleep(o.ms || 0);
+  out({ includedReviews: { state: 'available', limit: 8, remaining: o.remaining ?? 6, fullCapacityInMs: 1_800_000, rollingWindowMs: 3_600_000, repository: 'acme/shop' } });
 } else if (args[0] === 'review') {
   out({ type: 'review_context', baseBranch: 'main' });
   for (const message of ['Analyzing changes', 'Reviewing files']) { out({ type: 'status', message }); await sleep(400); }

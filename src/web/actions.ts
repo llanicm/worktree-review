@@ -256,9 +256,29 @@ export const actions: Record<string, Action> = {
     if (!wt) return;
     const { reviewer, effort } = reviewPick(wt);
     const body: StartCodeReview = reviewer === 'claude' ? { reviewer, effort } : { reviewer };
-    const r = await api<CodeReview>('POST', `/api/worktrees/${wt.id}/code-review`, body);
+    // Show it running straight away; the server's reply (and then live updates) replace this.
+    const reviews = (view().codeReviews ??= {});
+    const before = { review: reviews[reviewer], summary: wt.codeReviews[reviewer] };
+    const now = Date.now();
+    reviews[reviewer] = {
+      reviewer, status: 'running', startedAt: now, finishedAt: null, baseRef: wt.baseRef, fingerprint: wt.fingerprint,
+      findings: [], reviewedFiles: [], error: null, heartbeatAt: now, usage: null, effort: reviewer === 'claude' ? effort : undefined, message: 'Starting',
+    };
+    wt.codeReviews[reviewer] = { status: 'running', startedAt: now, finishedAt: null, heartbeatAt: now, open: 0, total: 0, sig: 'starting', stale: false };
     S.reviewMenu = null;
-    (view().codeReviews ??= {})[reviewer] = r;
+    indexFindings();
+    renderMain();
+    let r: CodeReview;
+    try {
+      r = await api<CodeReview>('POST', `/api/worktrees/${wt.id}/code-review`, body);
+    } catch (e) {
+      if (before.review) reviews[reviewer] = before.review; else delete reviews[reviewer];
+      if (before.summary) wt.codeReviews[reviewer] = before.summary; else delete wt.codeReviews[reviewer];
+      indexFindings();
+      renderMain();
+      throw e;
+    }
+    if (S.view?.wtId === wt.id) (S.view.codeReviews ??= {})[reviewer] = r;
     indexFindings();
     toast(reviewer === 'coderabbit' ? 'CodeRabbit started. This usually takes a few minutes.' : `Claude started a ${effort}-effort review.`);
     renderMain();

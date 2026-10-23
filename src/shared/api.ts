@@ -114,6 +114,8 @@ export interface CodeReviewSummary {
   total: number;
   /** Changes whenever a finding's status changes. */
   sig: string;
+  /** The files have changed since the review, so its line numbers may be off. */
+  stale: boolean;
 }
 
 export interface DiffStats {
@@ -428,6 +430,8 @@ export interface CodeReview {
   effort?: ReviewEffort;
   costUsd?: number | null;
   message?: string;
+  /** Git's tree hash of the worktree's files when the review ran; see contentTree on the server. */
+  contentTree?: string | null;
 }
 
 /** POST /api/worktrees/:id/code-review */
