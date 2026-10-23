@@ -511,6 +511,12 @@ export interface HookResponse {
   text: string | null;
 }
 
+/** POST /api/wait: a review for an idle session's waiter, or `done` when it should stop waiting. */
+export interface WaitResponse {
+  text: string | null;
+  done: boolean;
+}
+
 /** GET /api/worktrees/:id/bases: the choices in the "Compare with" menu. */
 export interface BaseChoices {
   /** Used when you haven't picked one. */

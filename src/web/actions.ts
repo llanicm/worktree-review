@@ -1,5 +1,5 @@
 // ---------- actions (data-act event delegation) ----------
-import type { CodeReview, FileBlame, Integrations, RepairResult, Reviewer, StartCodeReview } from '../shared/api.ts';
+import type { CodeReview, FileBlame, Integrations, RepairResult, Review, Reviewer, StartCodeReview } from '../shared/api.ts';
 import { fillFile } from './lazy.ts';
 import { indexFindings, loadCodeReviews, NAMES, reviewPick } from './code-review.ts';
 import { collapseAll, expandAll, redrawFile, toggleBody, toggleCommit, toggleFile } from './collapse.ts';
@@ -165,10 +165,17 @@ export const actions: Record<string, Action> = {
   submit: async () => {
     const wt = curWt();
     if (!wt) return;
-    await api('POST', `/api/worktrees/${wt.id}/submit`, { summary: S.summaries[wt.id] || '', targetSession: S.summaries[`${wt.id}:target`] || null });
+    const target = S.summaries[`${wt.id}:target`] || null;
+    const review = await api<Review>('POST', `/api/worktrees/${wt.id}/submit`, { summary: S.summaries[wt.id] || '', targetSession: target });
     S.summaries[wt.id] = '';
     S.editors.delete('summary');
-    toast(wt.sessions.length ? 'Sent. Claude gets it at the end of its current turn.' : 'Queued for the next Claude session that works here.');
+    // An idle session that was waiting takes it at once; a busy one when its turn ends. One that stopped before
+    // the plugin could wake it only gets it with the next message you send it.
+    const to = target ? st().sessions.filter((s) => s.sessionId === target) : wt.sessions;
+    toast(review.status === 'delivered' ? `Sent to ${review.deliveredTo?.name || 'Claude'}, which is starting on it now.`
+      : !to.length ? 'Queued for the next Claude session that works here.'
+      : to.some((s) => s.status === 'busy') ? 'Sent. Claude gets it at the end of its current turn.'
+      : `Queued. ${to.map((s) => s.name).join(', ')} ${to.length === 1 ? 'is' : 'are'} idle, so Claude gets it with your next message there.`);
     await reloadComments();
   },
   'cancel-review': async (el) => { await api('POST', `/api/reviews/${attr(el, 'id')}/cancel`); await reloadComments(); },

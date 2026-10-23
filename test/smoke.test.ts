@@ -215,6 +215,38 @@ test('a submitted review reaches the session through the hook', async () => {
   assert.equal((await api('POST', `/api/worktrees/${wt.id}/submit`, {})).status, 400);
 });
 
+test("an idle session's waiter wakes it with a review sent to it", async () => {
+  const main = '33333333-cccc-4ccc-8ccc-333333333333'; // shop-main, idle
+  const wt = await wtBy('main');
+  const wait = (session_id: string) => api('POST', '/api/wait', { session_id, cwd: wt.path });
+  assert.deepEqual((await wait('no-such-session')).json, { text: null, done: true }, 'an ended session stops waiting');
+
+  // A newer waiter for the same session replaces the old one.
+  const first = wait(main);
+  await sleep(200);
+  const waiting = wait(main);
+  assert.deepEqual((await first).json, { text: null, done: true });
+
+  await post('/api/comments', { wtId: wt.id, file: 'README.md', side: 'new', line: 1, lineText: 'x', body: 'Say what the shop sells' });
+  const review = await post(`/api/worktrees/${wt.id}/submit`, { targetSession: main });
+  assert.deepEqual([review.status, review.deliveredTo?.name], ['delivered', 'shop-main'], 'handed straight to the waiter');
+  const woken = await waiting;
+  assert.equal(woken.json.done, true);
+  assert.match(woken.json.text, /Say what the shop sells/);
+  assert.equal((await post('/api/hook', { session_id: main, cwd: wt.path })).text, null, 'delivered once');
+
+  // A busy session's waiter leaves its reviews for the Stop hook.
+  const search = await wtBy('feat/search-filters');
+  const busy = '22222222-bbbb-4bbb-8bbb-222222222222';
+  const ctrl = new AbortController();
+  const held = fetch(`${BASE}/api/wait`, { method: 'POST', headers: { 'x-wtr': '1', 'content-type': 'application/json' }, body: JSON.stringify({ session_id: busy, cwd: search.path }), signal: ctrl.signal }).catch(() => null);
+  await post('/api/comments', { wtId: search.id, file: 'src/search.ts', side: 'new', line: 1, lineText: 'x', body: 'Name the filter' });
+  assert.equal((await post(`/api/worktrees/${search.id}/submit`, {})).status, 'pending');
+  ctrl.abort();
+  await held;
+  assert.match((await post('/api/hook', { session_id: busy, cwd: search.path, event: 'Stop' })).text, /Name the filter/);
+});
+
 test('CodeRabbit findings can be sent, dismissed and restored', async () => {
   const wt = await wtBy('feat/checkout-discounts');
   const review = (await get(`/api/worktrees/${wt.id}/code-reviews`)).reviews.coderabbit;

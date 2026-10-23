@@ -17,7 +17,8 @@
     "Stop": [
       {
         "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/scripts/hook.mjs\"", "timeout": 5 }
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/scripts/hook.mjs\"", "timeout": 5 },
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/dist/scripts/wait.mjs\"", "asyncRewake": true, "timeout": 604800 }
         ]
       }
     ]

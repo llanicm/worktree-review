@@ -21,7 +21,7 @@ function options(out) {
   const common = { bundle: true, format: 'esm', legalComments: 'none', banner: { js: BANNER }, logLevel: 'warning', charset: 'utf8' };
   return [
     { ...common, platform: 'node', target: 'node18', entryPoints: { server: 'src/server/main.ts' }, outdir: out, outExtension: { '.js': '.mjs' } },
-    { ...common, platform: 'node', target: 'node18', entryPoints: { hook: 'src/scripts/hook.ts', 'ensure-server': 'src/scripts/ensure-server.ts' }, outdir: path.join(out, 'scripts'), outExtension: { '.js': '.mjs' } },
+    { ...common, platform: 'node', target: 'node18', entryPoints: { hook: 'src/scripts/hook.ts', wait: 'src/scripts/wait.ts', 'ensure-server': 'src/scripts/ensure-server.ts' }, outdir: path.join(out, 'scripts'), outExtension: { '.js': '.mjs' } },
     { ...common, platform: 'browser', target: ['chrome110', 'firefox115', 'safari16'], entryPoints: { app: 'src/web/app.ts', 'sse-worker': 'src/web/worker/sse-worker.ts' }, outdir: path.join(out, 'public') },
   ].map((o) => ({ ...o, absWorkingDir: ROOT }));
 }
