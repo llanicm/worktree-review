@@ -372,7 +372,7 @@ out({ type: 'system', subtype: 'init' });
 out({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Skill', input: { skill: 'code-review' } }] } });
 await sleep(800);
 out({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'git diff main...HEAD' } }] } });
-await sleep(400);
+await sleep(400 + Number(process.env.WTR_DEMO_REVIEW_MS || 0)); // set it to watch a review run
 const findings = path.basename(process.cwd()) === 'checkout-discounts' ? [
   { file: path.join(process.cwd(), 'src/checkout.ts'), startLine: ${L.tax}, severity: 'major', title: 'Tax is taken after a discount that can exceed the subtotal',
     comment: 'With a percent code over 100, sub - discount is negative, so taxFor gets a negative amount and the order total goes below zero.',

@@ -68,12 +68,59 @@ export function findingHtml(f: Finding, inline = false) {
   const detail = [f.comment && f.comment !== f.title ? `<div class="msg-body">${md(f.comment)}</div>` : '',
     f.suggestions ? `<details><summary>Suggested change</summary><pre class="suggestion">${esc(f.suggestions)}</pre></details>` : '',
     f.codegen && f.codegen !== f.comment ? `<details><summary>Fix guidance for agents</summary><div class="msg-body">${md(f.codegen)}</div></details>` : ''].join('');
-  return `<div class="thread cr-finding ${f.source} ${f.status}">
+  return `<div class="thread cr-finding ${f.source} ${f.status}"${inline ? ` id="fd-${esc(f.id)}"` : ''}>
     <div class="msg"><div class="msg-head"><strong class="cr-name">${NAMES[f.source]}</strong><span class="sev ${esc(f.severity)}">${esc(f.severity)}</span>
       ${!inline && loc ? `<a href="#" class="mono" data-act="cr-jump" data-file="${esc(f.file)}" data-line="${f.endLine || f.startLine || ''}">${esc(loc)}</a>` : ''}</div>
       ${f.title ? `<div class="cr-title">${md(f.title)}</div>` : ''}
       ${f.status === 'open' || !inline ? detail : ''}</div>
     <div class="thread-actions">${acts}</div></div>`;
+}
+
+const loc = (f: Finding) => (f.startLine ? `${f.startLine}${f.endLine && f.endLine !== f.startLine ? `–${f.endLine}` : ''}` : '');
+const jump = (f: Finding) => `data-act="cr-jump" data-file="${esc(f.file)}" data-line="${f.endLine || f.startLine || ''}" data-id="${esc(f.id)}"`;
+
+/** Whether the diff on screen has the finding's file, so the finding shows there in place. */
+const inDiff = (f: Finding) => !!f.file && !!S.view?.files.some((x) => x.path === f.file && !x.commit);
+
+/** The open findings that show in the diff, as links to them: one group per file, in the diff's order. */
+function indexHtml(open: Finding[]) {
+  const order = new Map((S.view?.files || []).map((x, i) => [x.path, i]));
+  const byFile = new Map<string, Finding[]>();
+  for (const f of [...open].sort((a, b) => (order.get(a.file) ?? 0) - (order.get(b.file) ?? 0) || (a.startLine || 0) - (b.startLine || 0))) {
+    const here = byFile.get(f.file);
+    if (here) here.push(f); else byFile.set(f.file, [f]);
+  }
+  return `<ul class="cr-index">${[...byFile].map(([file, fs]) => `<li>
+    <a href="#" class="cr-file mono" ${jump(fs[0] as Finding)} title="${esc(file)}">${esc(file)}</a>
+    <ul>${fs.map((f) => `<li><a href="#" class="cr-item" ${jump(f)}>
+      <span class="sev ${esc(f.severity)}">${esc(f.severity)}</span><span class="cr-line mono">${loc(f) ? `L${loc(f)}` : ''}</span><span class="cr-item-title">${md(f.title || f.comment.split('\n')[0] || 'Finding')}</span></a></li>`).join('')}</ul>
+  </li>`).join('')}</ul>`;
+}
+
+/** Findings already sent or dismissed: one line each, so they stay out of the way. */
+function doneHtml(done: Finding[]) {
+  if (!done.length) return '';
+  return `<details class="cr-done"><summary>${done.length} sent or dismissed</summary><ul>${done.map((f) => `<li>
+    <span class="muted small">${f.status === 'sent' ? 'Sent' : 'Dismissed'}</span>
+    <span class="mono small">${esc(f.file)}${loc(f) ? `:${loc(f)}` : ''}</span> <span class="cr-item-title">${md(f.title || 'Finding')}</span>
+    ${f.status === 'dismissed' ? `<button class="link-btn" data-act="cr-restore" data-id="${esc(f.id)}">undo</button>` : ''}</li>`).join('')}</ul></details>`;
+}
+
+/** Shown while a reviewer works: a page of code with a beam sweeping down it. */
+const SWEEP_S = 2.4;
+const lastCount = new Map<string, number>(); // reviewer -> findings counted when last drawn, to pop the badge only when it grows
+// The panel is redrawn as the review reports progress. Starting each animation part-way through, by how long the
+// review has been running, keeps the redrawn beam where it was rather than jumping back to the top.
+const phase = (r: CodeReview) => -(((Date.now() - r.startedAt) / 1000) % SWEEP_S);
+function scanHtml(r: CodeReview) {
+  const widths = [62, 84, 48, 70, 36, 78, 54, 66], indents = [0, 8, 8, 16, 16, 8, 0, 8];
+  const ph = phase(r);
+  const n = r.findings.length;
+  const grew = n > (lastCount.get(r.reviewer) ?? 0);
+  lastCount.set(r.reviewer, n);
+  return `<div class="cr-scan" aria-hidden="true"><div class="cr-scan-page">
+    ${widths.map((w, i) => `<i style="width:${w}%;margin-left:${indents[i]}%;animation-delay:${(ph + (i / widths.length) * SWEEP_S).toFixed(2)}s"></i>`).join('')}
+    <b class="cr-beam" style="animation-delay:${ph.toFixed(2)}s"></b></div>${n ? `<span class="cr-found${grew ? ' grew' : ''}">${n}</span>` : ''}</div>`;
 }
 
 function panelHtml(wt: Worktree, r: CodeReview) {
@@ -84,9 +131,10 @@ function panelHtml(wt: Worktree, r: CodeReview) {
   let head, body = '';
   if (r.status === 'running') {
     head = `${name} is reviewing against <code>${esc(r.baseRef)}</code>`;
-    body = r.reviewer === 'coderabbit'
-      ? `<p class="muted">Reviews usually take 2–6 minutes and can take 15 or more. You can leave this page; findings appear here and inline as they arrive.</p>`
-      : `<p class="muted">${r.message ? `${esc(r.message)}…` : 'Starting…'}</p><p class="muted">Findings appear here and inline when it's done. You can leave this page.</p>`;
+    const note = r.reviewer === 'coderabbit'
+      ? 'Reviews usually take 2–6 minutes and can take 15 or more.'
+      : r.message ? `${esc(r.message)}…` : 'Starting…';
+    body = `<div class="cr-working">${scanHtml(r)}<div><p>${note}</p><p class="muted">${findings.length ? `${findings.length} finding${findings.length === 1 ? '' : 's'} so far. ` : ''}They show in the code as they arrive. You can leave this page.</p></div></div>`;
   } else if (r.status === 'done') {
     head = `${name} · ${findings.length ? `${open.length} open of ${findings.length} finding${findings.length === 1 ? '' : 's'}` : 'no findings'}`;
     if (!findings.length) body = `<p class="muted">${r.reviewedFiles.length ? `Reviewed ${r.reviewedFiles.length} file${r.reviewedFiles.length === 1 ? '' : 's'} and found` : 'Found'} nothing to flag.</p>`;
@@ -98,12 +146,18 @@ function panelHtml(wt: Worktree, r: CodeReview) {
   if (r.usage) facts.push(`${r.usage.remaining} of ${r.usage.limit} reviews left this hour`);
   if (r.effort) facts.push(`${r.effort} effort`);
   if (r.costUsd) facts.push(`<span title="As Claude Code reports it. On a Claude plan this counts toward your usage rather than being billed.">$${r.costUsd.toFixed(2)}</span>`);
-  return `<div class="panel cr-panel ${r.reviewer}">
+  const shown = open.filter(inDiff), loose = open.filter((f) => !inDiff(f));
+  const byCommit = S.view?.diff.mode === 'commits';
+  if (r.status !== 'running') lastCount.delete(r.reviewer);
+  return `<div class="panel cr-panel ${r.reviewer} ${r.status}"${r.status === 'running' ? ` style="--ph:${phase(r).toFixed(2)}s"` : ''}>
     <div class="panel-head"><span>${head}</span><span class="actions"><span class="muted small">${facts.join(' · ')}</span>${open.length > 1 ? `<button class="btn small" data-act="cr-send-all" data-reviewer="${r.reviewer}">Send all to Claude</button>` : ''}</span></div>
     <div class="panel-body">
       ${stale ? `<div class="callout warn small">The code has changed since this review. Line numbers may be off; run ${name} again for a fresh look.</div>` : ''}
       ${body}
-      <div class="threads cr-list">${findings.map((f) => findingHtml(f)).join('')}</div>
+      ${shown.length ? indexHtml(shown) : ''}
+      ${loose.length ? `<div class="cr-loose"><div class="muted small">${byCommit ? 'Switch to All changes to see these in the code.' : 'Not in this diff, so shown here:'}</div>
+        <div class="threads cr-list">${loose.map((f) => findingHtml(f)).join('')}</div></div>` : ''}
+      ${doneHtml(findings.filter((f) => f.status !== 'open'))}
     </div></div>`;
 }
 

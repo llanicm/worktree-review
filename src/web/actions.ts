@@ -283,8 +283,13 @@ export const actions: Record<string, Action> = {
     if (!f) { toast('That file isn\'t in this diff view'); return; }
     if (isCollapsed(f)) { S.toggled.set(f.uid, false); renderMain(); }
     fillFile(f.path);
+    // The finding itself where it's drawn, else its line, else the file.
+    const id = el.dataset.id;
+    const finding = id ? document.getElementById(`fd-${id}`) : null;
     const row = document.querySelector(`tr.line[data-k="${CSS.escape(keyOf(f.path, 'new', el.dataset.line))}"]`);
-    (row || document.getElementById(`f-${fnv(f.path)}`))?.scrollIntoView({ block: 'center' });
+    const target = finding || row || document.getElementById(`f-${fnv(f.path)}`);
+    target?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    if (finding) { finding.classList.remove('flash'); void finding.offsetWidth; finding.classList.add('flash'); }
   },
   recheck: () => { S.integ = null; renderMain(); return loadIntegrations(true); },
   'copy-text': (el) => copy(attr(el, 'text')),
