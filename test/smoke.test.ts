@@ -386,7 +386,9 @@ test('the page renders a worktree without errors', { skip: !fs.existsSync(proces
     assert.ok(rows > 20, `rendered ${rows} diff rows`);
     assert.ok(await page.waitFor("document.querySelectorAll('.cr-finding.coderabbit').length"), 'CodeRabbit findings shown inline');
     assert.ok(await page.waitFor("document.querySelectorAll('.cr-panels > .cr-panel').length === 2"), 'a panel for each reviewer');
-    assert.ok(await page.waitFor("document.querySelectorAll('.cr-panel .cr-index a.cr-item[data-act=\"cr-jump\"]').length >= 2"), 'the panels list findings as links');
+    // The tests above sent two of the three findings, so one is still open and two are tucked away as sent.
+    assert.ok(await page.waitFor("document.querySelectorAll('.cr-panel .cr-index a.cr-item[data-act=\"cr-jump\"]').length === 1"), 'the panels list open findings as links');
+    assert.ok(await page.waitFor("document.querySelectorAll('.cr-panel .cr-done li').length === 2"), 'sent findings are listed apart');
     assert.ok(await page.waitFor("!document.querySelector('.cr-panel .cr-finding')"), 'findings in the diff are read there, not in the panel');
     // Both reviewers are ready, so Run code review asks which one; picking Claude offers the effort, preset from Settings.
     await page.eval("document.querySelector('[data-act=review-menu]').click()");
