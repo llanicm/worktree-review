@@ -135,6 +135,9 @@ nav { overflow-y: auto; flex: 1; padding-bottom: 12px; }
 .chip.merged { color: var(--purple); border-color: currentColor; }
 .chip.closed { color: var(--red); border-color: currentColor; }
 .chip.comments { color: var(--amber); border-color: currentColor; }
+.chip.agent { max-width: 100%; border-style: dashed; }
+.chip.agent .agent-sep { opacity: .6; }
+.chip.agent .agent-what { overflow: hidden; text-overflow: ellipsis; max-width: 160px; color: var(--fg); }
 .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--fg-muted); flex: none; }
 .dot.busy { background: var(--amber); animation: pulse 1.2s ease-in-out infinite; }
 .dot.idle { background: var(--green); }
