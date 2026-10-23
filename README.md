@@ -22,7 +22,7 @@ properly, and your comments reach the right session without you switching to it.
 
 ### Every worktree in one place
 
-The sidebar groups worktrees into **Claude is working** (a live session is using it), **Recent**,
+The sidebar groups worktrees into **Claude is working** (a live session or one of its subagents is using it), **Recent**,
 **PR merged** and **Older**. A blue dot means it changed since you last reviewed it. Each one shows
 its PR, uncommitted changes, open comments and code review findings. Turn on notifications to hear
 when a session finishes work you haven't looked at.
@@ -131,7 +131,9 @@ Code sessions from the last 30 days (in `~/.claude/projects`), finds the git rep
 all of that repo's worktrees. You can add other folders in Settings.
 
 **Linking sessions.** A live session counts as working in a worktree when its shell has been inside
-it, or its conversation keeps mentioning the path.
+it, or its conversation keeps mentioning the path. A subagent still running counts too: in the worktree
+it was given (`isolation: "worktree"`), or one it reaches into the same way. It shows as
+`session › task`, naming the session that started it.
 
 **Delivering reviews.** The plugin adds `UserPromptSubmit` and `Stop` hooks. When you send a review,
 the next of those hooks to fire in the right session hands it to Claude, with the file, line and

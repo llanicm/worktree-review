@@ -1,7 +1,7 @@
 // The server's internal records: what it keeps in memory and persists. The shapes it sends to
 // the page are in ../shared/api.ts.
 import type {
-  CleanedEntry, CodeReview, Comment, DiffStats, DirtyFile, DirtyKind, PRState,
+  AgentRef, CleanedEntry, CodeReview, Comment, DiffStats, DirtyFile, DirtyKind, PRState,
   Review, Reviewer, Session, UnmatchedCommit, WorktreeError,
 } from '../shared/api.ts';
 
@@ -27,6 +27,17 @@ export interface PRNode {
 
 export interface SessionRecord extends Session {
   pid: number;
+  worktreePaths: string[];
+  scannedSize: number;
+  scannedAt: number;
+  /** Its subagents that are still running. */
+  agents: AgentRecord[];
+}
+
+export interface AgentRecord {
+  agentId: string;
+  description: string;
+  agentType: string;
   worktreePaths: string[];
   scannedSize: number;
   scannedAt: number;
@@ -59,6 +70,7 @@ export interface WorktreeRecord {
   baseError?: string | null;
   nextCheck: number;
   sessions: SessionRecord[];
+  agents: AgentRef[];
   sessionSig?: string;
   pr?: PRNode | null;
   headInMerged: boolean | null;

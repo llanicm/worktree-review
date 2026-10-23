@@ -128,7 +128,7 @@ export const collapseAllHtml = (v: View) => v.diff.mode === 'commits' && (v.grou
   ? '<button class="btn" data-act="expand-all">Expand all</button>'
   : '<button class="btn" data-act="collapse-all">Collapse all</button>';
 
-export const headerSig = (wt: Worktree) => JSON.stringify([wt.sessions, wt.pr, wt.cleanup, wt.ahead, wt.dirty, wt.baseRef, wt.baseError, wt.error, wt.busy, S.removeErrors[wt.id], st().sessions.length, st().config]);
+export const headerSig = (wt: Worktree) => JSON.stringify([wt.sessions, wt.agents, wt.pr, wt.cleanup, wt.ahead, wt.dirty, wt.baseRef, wt.baseError, wt.error, wt.busy, S.removeErrors[wt.id], st().sessions.length, st().config]);
 
 function commitsHtml(commits: Commit[], wt: Worktree) {
   if (!commits.length && !wt.dirty) return '';

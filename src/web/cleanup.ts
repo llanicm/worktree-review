@@ -1,7 +1,7 @@
 // ---------- clean-up page ----------
 // Every worktree no Claude session is using, merged or not, sorted by whether it can go.
 import type { CleanupStatus, Worktree } from '../shared/api.ts';
-import { prChip } from './sidebar.ts';
+import { inUse, prChip } from './sidebar.ts';
 import { S, st } from './state.ts';
 import { ago, esc, shortPath } from './util.ts';
 
@@ -11,7 +11,7 @@ const hasCleanup = (w: Worktree): w is CleanWt => !!w.cleanup;
 export function cleanupGroups() {
   const g: Record<'ready' | 'look' | 'blocked', CleanWt[]> = { ready: [], look: [], blocked: [] };
   for (const w of st().worktrees) {
-    if (!hasCleanup(w) || w.sessions.length) continue;
+    if (!hasCleanup(w) || inUse(w)) continue;
     const cs = w.cleanup;
     (cs.eligible && !w.busy ? g.ready : cs.forceable ? g.look : g.blocked).push(w);
   }
@@ -47,12 +47,12 @@ export function cleanupPageHtml() {
   const g = cleanupGroups();
   const picked = g.ready.filter(cleanPicked).length;
   const running = state.jobs.some((j) => j.kind === 'cleanup' && j.status === 'running');
-  const inUse = state.worktrees.filter((w) => w.cleanup && w.sessions.length).length;
+  const busy = state.worktrees.filter((w) => w.cleanup && inUse(w)).length;
   const sec = (title: string, sub: string, items: CleanWt[], opts: RowOpts) => items.length ? `<section class="clean-sec"><h2>${title} <span class="count">${items.length}</span>${opts.tools || ''}</h2>
       ${sub ? `<p class="muted small">${sub}</p>` : ''}${items.map((w) => cleanRow(w, opts)).join('')}</section>` : '';
   return `<div class="page setup clean-page">
     <h1>Clean up worktrees</h1>
-    <p class="muted">Worktrees no Claude session is using${inUse ? ` (${inUse} in use ${inUse === 1 ? 'is' : 'are'} left out)` : ''}. Removing one deletes its folder.
+    <p class="muted">Worktrees no Claude session is using${busy ? ` (${busy} in use ${busy === 1 ? 'is' : 'are'} left out)` : ''}. Removing one deletes its folder.
       Branches are kept, except a merged branch whose commits are all in its PR, and every removal can be restored from <em>Cleaned up</em> in the sidebar.</p>
     ${!g.ready.length && !g.look.length && !g.blocked.length ? '<div class="empty">Nothing to clean up.</div>' : ''}
     ${sec('Ready to remove', `Nothing uncommitted would be lost. Ones changed in the last ${state.config.recentDays} days start unticked.`, g.ready, {

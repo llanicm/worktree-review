@@ -73,6 +73,11 @@ test('state lists the demo worktrees, sessions and PRs', async () => {
   assert.ok(by.main.isMain);
   assert.deepEqual(by['feat/checkout-discounts'].sessions.map((s: Json) => s.name), ['shop-checkout']);
   assert.deepEqual(by['feat/search-filters'].sessions.map((s: Json) => s.name), ['shop-search']);
+  // A running subagent counts as working where it works, under the session that started it; a finished one doesn't.
+  assert.deepEqual(by['fix/tax-rounding'].sessions, []);
+  assert.deepEqual(by['fix/tax-rounding'].agents.map((a: Json) => [a.parent.name, a.description, a.agentType]), [['shop-main', 'Round tax per line item', 'general-purpose']]);
+  assert.deepEqual(by['spike/graphql-gateway'].agents, []);
+  assert.deepEqual(by.main.agents, []);
   assert.equal(by['feat/checkout-discounts'].ahead, 3);
   assert.equal(by['feat/checkout-discounts'].dirty, 1);
   assert.deepEqual(by['feat/checkout-discounts'].comments.draft, 1);
@@ -97,6 +102,7 @@ test('cleanup status explains each worktree', async () => {
   assert.equal(by['feat/checkout-discounts'].eligible, false);
   assert.ok(by['feat/checkout-discounts'].reasons.some((r: string) => /in use by shop-checkout/.test(r)));
   assert.ok(by['fix/tax-rounding'].notes.some((n: string) => /PR #42 is still open/.test(n)));
+  assert.ok(by['fix/tax-rounding'].reasons.some((r: string) => /in use by a subagent of shop-main/.test(r)));
 });
 
 test('diffs: full, by commit, blame', async () => {
