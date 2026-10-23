@@ -1,6 +1,6 @@
 // ---------- loading & routing ----------
 import type { BlameResponse, CommentsResponse, DiffResponse, FileBlame } from '../shared/api.ts';
-import { loadCodeRabbit } from './coderabbit.ts';
+import { loadCodeReviews, reviewsSig } from './code-review.ts';
 import { redrawFile } from './collapse.ts';
 import { blameKey } from './file.ts';
 import { parseDiff } from './diff.ts';
@@ -38,7 +38,7 @@ export async function loadView({ quiet = false } = {}) {
         .map((f, i) => ({ f, i, k: first(f.path) })).sort((a, b) => a.k - b.k || a.i - b.i).map((x) => x.f);
     }
     const prev = S.view;
-    const v: View = { wtId: wt.id, diff, files, groups, comments: cm.comments, reviews: cm.reviews, commentSig: wt.comments.sig, crSig: wt.coderabbit?.sig, blame: prev?.wtId === wt.id && prev.blame?.fingerprint === diff.fingerprint ? prev.blame : null };
+    const v: View = { wtId: wt.id, diff, files, groups, comments: cm.comments, reviews: cm.reviews, commentSig: wt.comments.sig, crSig: reviewsSig(wt), blame: prev?.wtId === wt.id && prev.blame?.fingerprint === diff.fingerprint ? prev.blame : null };
     S.view = v;
     if (diff.mode !== 'commits' && !v.blame && diff.commits.length) {
       api<BlameResponse>('GET', `/api/worktrees/${wt.id}/blame`).then((b) => {
@@ -47,7 +47,7 @@ export async function loadView({ quiet = false } = {}) {
         applyBlame();
       }, () => {});
     }
-    await loadCodeRabbit();
+    await loadCodeReviews();
     if (seq !== S.seq) return;
     S.stale = false;
     renderMain();

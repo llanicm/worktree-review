@@ -1,6 +1,8 @@
 name: build
 # Rebuilds dist/ from src/ after every change to main and commits it if it changed. dist/ is what a
 # Claude Code plugin install runs (installs have no build step), so contributors never build it by hand.
+# Then release-please keeps a release PR open with the next version and changelog; merging it tags the
+# release. The version is read at runtime, so the release commit needs no rebuild.
 on:
   push:
     branches: [main]
@@ -16,7 +18,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ssh-key: ${{ secrets.BUILD_DEPLOY_KEY }}
       - uses: actions/setup-node@v4
@@ -35,3 +37,27 @@ jobs:
           git commit -m "Build dist/ from ${GITHUB_SHA::7}"
           git pull --rebase origin main
           git push origin HEAD:main
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    # RELEASE_PLEASE_TOKEN is a fine-grained token (contents and pull requests: write on this repo). With the
+    # workflow's own token, the release PR wouldn't trigger the required check and couldn't be merged.
+    steps:
+      # The build job may have just pushed a dist/ commit, so release from the tip of main, not the triggering commit.
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      # What users install is the committed dist/; never tag a release where it lags behind src/.
+      - name: dist/ matches src/
+        run: node build.mjs --check
+      - uses: googleapis/release-please-action@v4
+        with:
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN }}
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          target-branch: main

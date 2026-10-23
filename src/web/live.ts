@@ -1,6 +1,6 @@
 // ---------- live updates ----------
 import type { PublicState } from '../shared/api.ts';
-import { loadCodeRabbit } from './coderabbit.ts';
+import { loadCodeReviews, NAMES, REVIEWERS, reviewsSig } from './code-review.ts';
 import { loadView, onHash, reloadComments } from './loading.ts';
 import { loadIntegrations, setupSig } from './setup.ts';
 import { renderSidebar } from './sidebar.ts';
@@ -23,13 +23,15 @@ function maybeNotify(st: PublicState) {
   }
   S.prevStatus = new Map(st.sessions.map((s) => [s.sessionId, s.status]));
   for (const w of st.worktrees) {
-    const prev = S.prevCr?.get(w.id);
-    if (prev === 'running' && w.coderabbit && w.coderabbit.status !== 'running') {
-      const n = new Notification(`CodeRabbit finished on ${w.branch || 'a worktree'}`, { body: w.coderabbit.total ? `${w.coderabbit.total} finding${w.coderabbit.total === 1 ? '' : 's'}` : 'No findings', tag: `cr-${w.id}` });
-      n.onclick = () => { window.focus(); location.hash = `#/${w.id}`; };
+    for (const k of REVIEWERS) {
+      const r = w.codeReviews[k];
+      if (S.prevCr?.get(`${w.id} ${k}`) === 'running' && r && r.status !== 'running') {
+        const n = new Notification(`${NAMES[k]} finished reviewing ${w.branch || 'a worktree'}`, { body: r.total ? `${r.total} finding${r.total === 1 ? '' : 's'}` : 'No findings', tag: `cr-${w.id}-${k}` });
+        n.onclick = () => { window.focus(); location.hash = `#/${w.id}`; };
+      }
     }
   }
-  S.prevCr = new Map(st.worktrees.map((w) => [w.id, w.coderabbit?.status]));
+  S.prevCr = new Map(st.worktrees.flatMap((w) => REVIEWERS.map((k) => [`${w.id} ${k}`, w.codeReviews[k]?.status] as const)));
 }
 
 function onState(st: PublicState) {
@@ -61,16 +63,18 @@ function onState(st: PublicState) {
   if (wt.fingerprint !== v.diff.fingerprint) {
     const typing = [...S.editors.entries()].some(([k, val]) => k !== 'summary' && val !== undefined);
     if (typing) { S.stale = true; renderMain(); } else loadView({ quiet: true });
-  } else if ((wt.coderabbit?.sig || null) !== (v.crSig || null)) {
-    const was = v.cr?.status;
-    v.crSig = wt.coderabbit?.sig;
-    loadCodeRabbit().then(() => {
+  } else if (reviewsSig(wt) !== v.crSig) {
+    const was = REVIEWERS.map((k) => v.codeReviews?.[k]?.status);
+    v.crSig = reviewsSig(wt);
+    loadCodeReviews().then(() => {
       const cur = S.view;
       if (!cur) return;
-      if (was === 'running' && cur.cr && cur.cr.status !== 'running') {
-        const n = cur.cr.findings.length;
-        toast(cur.cr.status === 'done' ? `CodeRabbit finished: ${n ? `${n} finding${n === 1 ? '' : 's'}` : 'no findings'}` : 'CodeRabbit review stopped', cur.cr.status === 'failed');
-      }
+      REVIEWERS.forEach((k, i) => {
+        const r = cur.codeReviews?.[k];
+        if (was[i] !== 'running' || !r || r.status === 'running') return;
+        const n = r.findings.length;
+        toast(r.status === 'done' ? `${NAMES[k]} finished: ${n ? `${n} finding${n === 1 ? '' : 's'}` : 'no findings'}` : `${NAMES[k]} review stopped`, r.status === 'failed');
+      });
       if (wt.comments.sig !== cur.commentSig) { cur.commentSig = wt.comments.sig; reloadComments(); } else renderMain();
     });
   } else if (wt.comments.sig !== v.commentSig) {

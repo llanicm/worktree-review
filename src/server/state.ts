@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import { STATE_PATH } from './paths.ts';
+import type { CodeReview } from '../shared/api.ts';
 import type { Repo, SessionRecord, State, WorktreeRecord, WorktreeState } from './types.ts';
 import { isRecord, loadJson } from './util.ts';
 
@@ -8,8 +9,20 @@ import { isRecord, loadJson } from './util.ts';
 export const repos = new Map<string, Repo>(); // commonDir -> repo
 export const wts = new Map<string, WorktreeRecord>(); // id -> worktree
 export const sessions = new Map<string, SessionRecord>(); // sessionId -> session
+/** Claude Code processes this server started to run code reviews; they aren't sessions to link or deliver to. */
+export const reviewerPids = new Set<number>();
 
 // ---------- persisted state ----------
+
+// Before Claude could review, state.json kept one CodeRabbit review per worktree under "coderabbit".
+function fromCodeRabbit(old: unknown): State['codeReviews'] {
+  if (!isRecord(old)) return {};
+  const out: State['codeReviews'] = {};
+  for (const [id, r] of Object.entries(old as Record<string, CodeReview>)) {
+    out[id] = { coderabbit: { ...r, reviewer: 'coderabbit', findings: r.findings.map((f) => ({ ...f, source: 'coderabbit' })) } };
+  }
+  return out;
+}
 
 // state.json is only ever written by this server, so its collections are trusted past the
 // top-level shape check.
@@ -23,7 +36,7 @@ function loadState(): State {
     reviews: Array.isArray(o.reviews) ? (o.reviews as State['reviews']) : [],
     cleaned: Array.isArray(o.cleaned) ? (o.cleaned as State['cleaned']) : [],
     trash: Array.isArray(o.trash) ? (o.trash as string[]) : [],
-    coderabbit: isRecord(o.coderabbit) ? (o.coderabbit as State['coderabbit']) : {},
+    codeReviews: isRecord(o.codeReviews) ? (o.codeReviews as State['codeReviews']) : fromCodeRabbit(o.coderabbit),
   };
   if (typeof o.onboardedAt === 'number' || o.onboardedAt === null) state.onboardedAt = o.onboardedAt;
   // Installed before there was a welcome step, and already used: don't send them through it now.
@@ -33,7 +46,9 @@ function loadState(): State {
 
 export const state: State = loadState();
 // A review that was running when the server stopped can't be resumed.
-for (const r of Object.values(state.coderabbit)) if (r.status === 'running') { r.status = 'failed'; r.error = 'Interrupted: the server restarted during the review.'; }
+for (const byReviewer of Object.values(state.codeReviews)) {
+  for (const r of Object.values(byReviewer)) if (r.status === 'running') { r.status = 'failed'; r.error = 'Interrupted: the server restarted during the review.'; }
+}
 
 let saveTimer: NodeJS.Timeout | undefined;
 export function save(): void {

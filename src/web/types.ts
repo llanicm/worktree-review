@@ -1,6 +1,6 @@
 // Client-only types: what app.js derives from the API responses in src/shared/api.ts.
 import type {
-  BaseChoices, BlameResponse, CodeRabbitReview, FileBlame, Comment, DiffResponse, DirListing, Finding, Integrations, PublicState, Review, ReviewStatus,
+  BaseChoices, BlameResponse, CodeReview, FileBlame, Comment, DiffResponse, DirListing, Finding, Integrations, PublicState, Review, ReviewEffort, Reviewer, ReviewStatus,
 } from '../shared/api.ts';
 
 // ---------- parsed diffs ----------
@@ -75,7 +75,7 @@ export interface View {
   commentSig: string;
   crSig: string | undefined;
   blame: BlameResponse | null;
-  cr?: CodeRabbitReview | null;
+  codeReviews?: Partial<Record<Reviewer, CodeReview>>;
   /** Open findings by "file|new|line" anchor. */
   crByAnchor?: Map<string, Finding[]>;
   headerSig?: string;
@@ -123,7 +123,9 @@ export interface State {
   hl?: number | null;              // commit number being highlighted
   scrollTo?: string | null;        // element id to scroll to after the next render
   picker?: Picker | null;
-  prevCr?: Map<string, ReviewStatus | undefined>;
+  prevCr?: Map<string, ReviewStatus | undefined>; // `${wtId} ${reviewer}` -> status
+  reviewMenu?: string | null;      // wtId whose "Run code review" menu is open
+  reviewPick?: { reviewer: Reviewer; effort: ReviewEffort | null } | null;
 }
 
 /** What the SharedWorker posts (mirrors src/web/worker/sse-worker.ts, which can't import from here). */

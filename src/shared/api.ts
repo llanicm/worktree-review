@@ -5,6 +5,12 @@
 
 export type Editor = 'vscode' | 'cursor' | 'windsurf' | 'zed' | 'none';
 
+/** Who runs a code review: the CodeRabbit CLI, or Claude Code's built-in /code-review. */
+export type Reviewer = 'coderabbit' | 'claude';
+
+/** Claude Code's --effort levels, cheapest first. */
+export type ReviewEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
 export interface Config {
   /** Extra folders whose immediate children are scanned for repos. */
   roots: string[];
@@ -17,6 +23,8 @@ export interface Config {
   prPollMinutes: number;
   /** Target of "open" links. */
   editor: Editor;
+  /** The effort preselected when starting a Claude code review. */
+  reviewEffort: ReviewEffort;
 }
 
 // ---------- worktrees ----------
@@ -86,7 +94,7 @@ export interface CleanupStatus {
 
 export type ReviewStatus = 'running' | 'done' | 'failed' | 'cancelled';
 
-export interface CodeRabbitSummary {
+export interface CodeReviewSummary {
   status: ReviewStatus;
   startedAt: number;
   finishedAt: number | null;
@@ -129,7 +137,8 @@ export interface Worktree {
   /** What's happening to it right now, e.g. "cleanup" or "remove". */
   busy: string | null;
   dirtyKind: DirtyKind | null;
-  coderabbit: CodeRabbitSummary | null;
+  /** Each reviewer's latest review. */
+  codeReviews: Partial<Record<Reviewer, CodeReviewSummary>>;
   review: { reviewedAt: number | null; needsReview: boolean };
   comments: { draft: number; waiting: number; open: number; sig: string };
 }
@@ -201,6 +210,8 @@ export interface PublicState {
   coderabbitLogin: CodeRabbitLogin | null;
   jobs: Job[];
   coderabbitReady: boolean;
+  /** Whether the claude CLI was found, so Claude can run code reviews. */
+  claudeReady: boolean;
   installedAt: number;
   sessions: Session[];
   cleaned: CleanedEntry[];
@@ -316,7 +327,7 @@ export interface Comment {
   commitSubject?: string;
   reviewId?: string;
   resolvedAt?: number;
-  /** Set when it came from a CodeRabbit finding. */
+  /** Set when it came from a code review finding. */
   fromFinding?: string;
   /** Set when it was handed to a Claude session. */
   deliveredTo?: DeliveredTo;
@@ -359,12 +370,13 @@ export interface NewComment {
   commitSubject?: string;
 }
 
-// ---------- CodeRabbit ----------
+// ---------- code reviews (CodeRabbit or Claude) ----------
 
 export type FindingStatus = 'open' | 'sent' | 'dismissed';
 
 export interface Finding {
   id: string;
+  source: Reviewer;
   severity: string;
   file: string;
   startLine: number | null;
@@ -386,7 +398,8 @@ export interface CodeRabbitUsage {
   repository: string;
 }
 
-export interface CodeRabbitReview {
+export interface CodeReview {
+  reviewer: Reviewer;
   status: ReviewStatus;
   startedAt: number;
   finishedAt: number | null;
@@ -396,13 +409,24 @@ export interface CodeRabbitReview {
   reviewedFiles: string[];
   error: string | null;
   heartbeatAt: number;
+  /** CodeRabbit's hourly allowance, as of the start. */
   usage: CodeRabbitUsage | null;
+  /** Claude's effort level, and what the run cost as Claude Code reports it. */
+  effort?: ReviewEffort;
+  costUsd?: number | null;
   message?: string;
 }
 
-/** GET /api/worktrees/:id/coderabbit */
-export interface CodeRabbitResponse {
-  review: CodeRabbitReview | null;
+/** POST /api/worktrees/:id/code-review */
+export interface StartCodeReview {
+  reviewer: Reviewer;
+  /** Claude only; the configured default when left out. */
+  effort?: ReviewEffort;
+}
+
+/** GET /api/worktrees/:id/code-reviews */
+export interface CodeReviewsResponse {
+  reviews: Partial<Record<Reviewer, CodeReview>>;
   usage: CodeRabbitUsage | null;
 }
 
@@ -422,7 +446,8 @@ export interface Integrations {
     seat?: string | null;
   };
   coderabbitLogin: CodeRabbitLogin | null;
-  claude: { lastHookAt: number | null; sessions: number; version: string };
+  /** `version` is this plugin's; `cliVersion` is the claude CLI's, null when it isn't found. */
+  claude: { lastHookAt: number | null; sessions: number; version: string; cliVersion: string | null };
   node: string;
   dataDir: string;
   configPath: string;
@@ -459,7 +484,7 @@ export interface PromptResponse {
   text: string;
 }
 
-/** POST /api/worktrees/:id/coderabbit/send-all */
+/** POST /api/worktrees/:id/code-review/:reviewer/send-all */
 export interface SendAllResponse {
   sent: number;
 }

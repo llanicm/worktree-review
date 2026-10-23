@@ -25,7 +25,7 @@ npm run demo        # try it on a made-up repo at http://localhost:4848
 npm run check       # what CI runs: types, then a fresh build and the smoke test
 ```
 
-The demo runs on its own made-up repo, home folder and stand-ins for `gh` and `coderabbit`, so
+The demo runs on its own made-up repo, home folder and stand-ins for `gh`, `coderabbit` and `claude`, so
 it never touches your own repos or accounts.
 
 ### Things to know
@@ -34,29 +34,36 @@ it never touches your own repos or accounts.
   (they have no build step), so it's committed, but CI rebuilds and commits it after every merge.
   The scripts above build into `.build/` instead, and a PR that changes `dist/` fails its check.
 - **Strict TypeScript, no runtime dependencies.** The server uses Node built-ins and shells out to
-  `git`, `gh` and `coderabbit`; the page is plain DOM code. Request and response shapes live in
+  `git`, `gh`, `coderabbit` and `claude`; the page is plain DOM code. Request and response shapes live in
   `src/shared/api.ts`, used by both sides.
 - **Keep it safe.** Anything that removes a worktree, deletes a branch or changes the user's repos
   needs a clear reason it can't lose work, and a test.
 - **Add to the smoke test** (`test/smoke.test.ts`) for behaviour you add or fix. For anything that
   could make the page slower, compare `npm run bench` before and after.
 - **Match the surrounding code:** its naming, terse style and comments that explain why, not what.
-- **Don't bump the version.** The maintainer does that when releasing.
+- **Don't bump the version.** release-please does that when a release is merged.
 
 ## Pull requests
 
 - Keep each PR to one change, and describe what it does and why.
 - CI must pass, and a maintainer reviews every PR before it's merged.
-- PRs are squash-merged, so the PR title becomes the commit message: write it as a short,
-  imperative summary ("Show blame for unchanged lines").
+- PRs are squash-merged, so the PR title becomes the commit message. Write it as a
+  [conventional commit](https://www.conventionalcommits.org) with a short, imperative summary:
+  `feat: show blame for unchanged lines`, `fix(diff): keep comments on renamed files`. The type sets
+  the next version: `fix` is a patch, `feat` a minor release, and `!` after the type (`feat!:`) a
+  major one; `docs`, `refactor`, `test`, `build`, `ci` and `chore` don't release on their own. CI
+  checks the title.
 
 ## Releasing (maintainers)
 
-1. Bump `version` in `.claude-plugin/plugin.json` and `package.json`, and merge that to `main`.
-2. Wait for the build workflow to commit the rebuilt `dist/`.
-3. Tag that commit and push the tag: `git tag v2.1.0 && git push origin v2.1.0`. The release workflow
-   checks that the tag matches the version and `dist/` matches `src/`, runs the tests, and publishes
-   a GitHub Release with notes. Running dashboards pick up the new version on the next session start.
+Releases are automated with [release-please](https://github.com/googleapis/release-please). After
+each merge to `main`, it keeps a release PR open with the next version, worked out from the PR
+titles, and the changelog. Merging that PR bumps the version in `package.json` and
+`.claude-plugin/plugin.json`, tags `v<version>` and publishes a GitHub Release. Running dashboards
+pick up the new version on the next session start, once users update the plugin.
+
+The workflow needs a `RELEASE_PLEASE_TOKEN` secret: a fine-grained token with *Contents* and *Pull
+requests* write access to this repository, so the release PR runs the required checks.
 
 By contributing, you agree that your contributions are licensed under the [MIT License](LICENSE)
 and that you'll follow the [Code of Conduct](CODE_OF_CONDUCT.md).

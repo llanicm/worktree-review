@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import type { DirListing } from '../shared/api.ts';
-import { config, isEditor } from './config.ts';
+import { config, isEditor, isEffort } from './config.ts';
 import { httpError } from './exec.ts';
 import { CONFIG_PATH, expand, HOME } from './paths.ts';
 import { changed } from './state.ts';
@@ -25,6 +25,9 @@ export async function updateConfig(body: unknown): Promise<void> {
     } else if (k === 'editor') {
       if (!isEditor(v)) { errors.push(`Invalid value for ${k}`); continue; }
       config.editor = v;
+    } else if (k === 'reviewEffort') {
+      if (!isEffort(v)) { errors.push(`Invalid value for ${k}`); continue; }
+      config.reviewEffort = v;
     } else if (k === 'recentDays') {
       if (!isIntIn(v, 1, 90)) { errors.push(`Invalid value for ${k}`); continue; }
       config.recentDays = v;

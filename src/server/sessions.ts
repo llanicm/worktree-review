@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CLAUDE_DIR } from './paths.ts';
 import { pidAlive } from './exec.ts';
-import { changed, sessions, wts } from './state.ts';
+import { changed, reviewerPids, sessions, wts } from './state.ts';
 import { isRecord, loadJson } from './util.ts';
 
 const transcriptCache = new Map<string, string>(); // sessionId -> path
@@ -76,7 +76,7 @@ export function refreshSessions(): void {
   const paths = [...wts.values()].map((w) => w.path);
   for (const f of files) {
     const info = parseSessionInfo(loadJson(path.join(dir, f), null));
-    if (!info || !pidAlive(info.pid)) continue;
+    if (!info || !pidAlive(info.pid) || reviewerPids.has(info.pid)) continue;
     live.add(info.sessionId);
     let s = sessions.get(info.sessionId);
     if (!s) { s = { sessionId: info.sessionId, worktreePaths: [], scannedSize: -1, scannedAt: 0, pid: info.pid, name: '', status: 'unknown' }; sessions.set(info.sessionId, s); }

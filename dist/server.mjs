@@ -6,7 +6,7 @@ import fs15 from "node:fs";
 // src/server/http.ts
 import fs14 from "node:fs";
 import http from "node:http";
-import path10 from "node:path";
+import path11 from "node:path";
 
 // src/server/exec.ts
 import { execFile } from "node:child_process";
@@ -157,10 +157,14 @@ var DEFAULT_CONFIG = {
   recentDays: 3,
   prPollMinutes: 5,
   // Editor for "open" links: vscode, cursor, windsurf, zed, or none.
-  editor: "vscode"
+  editor: "vscode",
+  // Effort preselected for Claude code reviews: low, medium, high, xhigh, or max.
+  reviewEffort: "low"
 };
 var EDITORS = ["vscode", "cursor", "windsurf", "zed", "none"];
 var isEditor = (v) => typeof v === "string" && EDITORS.includes(v);
+var EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+var isEffort = (v) => typeof v === "string" && EFFORTS.includes(v);
 function loadConfig() {
   const saved = loadJson(CONFIG_PATH, {});
   const o = isRecord(saved) ? saved : {};
@@ -171,7 +175,8 @@ function loadConfig() {
     autoCleanup: typeof o.autoCleanup === "boolean" ? o.autoCleanup : d.autoCleanup,
     recentDays: typeof o.recentDays === "number" ? o.recentDays : d.recentDays,
     prPollMinutes: typeof o.prPollMinutes === "number" ? o.prPollMinutes : d.prPollMinutes,
-    editor: isEditor(o.editor) ? o.editor : d.editor
+    editor: isEditor(o.editor) ? o.editor : d.editor,
+    reviewEffort: isEffort(o.reviewEffort) ? o.reviewEffort : d.reviewEffort
   };
 }
 var config = loadConfig();
@@ -182,6 +187,15 @@ import fs4 from "node:fs";
 var repos = /* @__PURE__ */ new Map();
 var wts = /* @__PURE__ */ new Map();
 var sessions = /* @__PURE__ */ new Map();
+var reviewerPids = /* @__PURE__ */ new Set();
+function fromCodeRabbit(old) {
+  if (!isRecord(old)) return {};
+  const out = {};
+  for (const [id, r] of Object.entries(old)) {
+    out[id] = { coderabbit: { ...r, reviewer: "coderabbit", findings: r.findings.map((f) => ({ ...f, source: "coderabbit" })) } };
+  }
+  return out;
+}
 function loadState() {
   const saved = loadJson(STATE_PATH, {});
   const o = isRecord(saved) ? saved : {};
@@ -192,16 +206,18 @@ function loadState() {
     reviews: Array.isArray(o.reviews) ? o.reviews : [],
     cleaned: Array.isArray(o.cleaned) ? o.cleaned : [],
     trash: Array.isArray(o.trash) ? o.trash : [],
-    coderabbit: isRecord(o.coderabbit) ? o.coderabbit : {}
+    codeReviews: isRecord(o.codeReviews) ? o.codeReviews : fromCodeRabbit(o.coderabbit)
   };
   if (typeof o.onboardedAt === "number" || o.onboardedAt === null) state2.onboardedAt = o.onboardedAt;
   else if (state2.comments.length || state2.cleaned.length || Object.values(state2.worktrees).some((w) => w.reviewedAt)) state2.onboardedAt = Date.now();
   return state2;
 }
 var state = loadState();
-for (const r of Object.values(state.coderabbit)) if (r.status === "running") {
-  r.status = "failed";
-  r.error = "Interrupted: the server restarted during the review.";
+for (const byReviewer of Object.values(state.codeReviews)) {
+  for (const r of Object.values(byReviewer)) if (r.status === "running") {
+    r.status = "failed";
+    r.error = "Interrupted: the server restarted during the review.";
+  }
 }
 var saveTimer;
 function save() {
@@ -703,6 +719,19 @@ function markHook() {
 var integrations = { at: 0, data: null, pending: null };
 var crLogin = null;
 var coderabbitReady = () => !!(integrations.data?.coderabbit.installed && integrations.data?.coderabbit.authed);
+var claudeReady = () => !!integrations.data?.claude.cliVersion;
+var claudePath = "claude";
+var claudeBin = () => claudePath;
+async function probeClaude() {
+  const onPath = await probe("claude", ["--version"]);
+  const exec = process.env.CLAUDE_CODE_EXECPATH;
+  if (!onPath.missing || !exec) {
+    claudePath = "claude";
+    return onPath;
+  }
+  claudePath = exec;
+  return probe(exec, ["--version"]);
+}
 async function probe(cmd, args, opts = {}) {
   try {
     return { ok: true, out: await run(cmd, args, { timeout: 15e3, ...opts }) };
@@ -722,12 +751,13 @@ function lastJson(text) {
   return null;
 }
 async function checkIntegrations() {
-  const [ghV, ghAuth, crV, crStatus, crPlain] = await Promise.all([
+  const [ghV, ghAuth, crV, crStatus, crPlain, claudeV] = await Promise.all([
     probe("gh", ["--version"]),
     probe("gh", ["auth", "status", "--hostname", "github.com"]),
     probe("coderabbit", ["--version"]),
     probe("coderabbit", ["auth", "status", "--agent"]),
-    probe("coderabbit", ["auth", "status"])
+    probe("coderabbit", ["auth", "status"]),
+    probeClaude()
   ]);
   const gh = { installed: !ghV.missing, version: ghV.out.match(/gh version (\S+)/)?.[1] || null, authed: ghAuth.ok, account: null };
   gh.account = ghAuth.out.match(/account (\S+)/)?.[1] || null;
@@ -746,7 +776,7 @@ async function checkIntegrations() {
     gh,
     coderabbit: cr,
     coderabbitLogin: crLogin,
-    claude: { lastHookAt, sessions: sessions.size, version: VERSION },
+    claude: { lastHookAt, sessions: sessions.size, version: VERSION, cliVersion: claudeV.ok ? claudeV.out.trim().split(/\s/)[0] || null : null },
     node: process.version,
     dataDir: DATA_DIR,
     configPath: CONFIG_PATH
@@ -754,7 +784,7 @@ async function checkIntegrations() {
 }
 async function getIntegrations(force = false) {
   if (!force && integrations.data && Date.now() - integrations.at < 6e4) {
-    return { ...integrations.data, coderabbitLogin: crLogin, claude: { lastHookAt, sessions: sessions.size, version: VERSION } };
+    return { ...integrations.data, coderabbitLogin: crLogin, claude: { ...integrations.data.claude, lastHookAt, sessions: sessions.size } };
   }
   const pending = integrations.pending ?? checkIntegrations().then((data) => {
     integrations = { at: Date.now(), data, pending: null };
@@ -947,7 +977,7 @@ function refreshSessions() {
   const paths = [...wts.values()].map((w) => w.path);
   for (const f of files) {
     const info = parseSessionInfo(loadJson(path5.join(dir, f), null));
-    if (!info || !pidAlive(info.pid)) continue;
+    if (!info || !pidAlive(info.pid) || reviewerPids.has(info.pid)) continue;
     live.add(info.sessionId);
     let s = sessions.get(info.sessionId);
     if (!s) {
@@ -1164,7 +1194,18 @@ async function runCleanup() {
 function publicWorktree(wt) {
   const s = state.worktrees[wt.id] ?? {};
   const mine = state.comments.filter((c) => c.wtId === wt.id);
-  const r = state.coderabbit[wt.id];
+  const codeReviews = {};
+  for (const [k, r] of Object.entries(state.codeReviews[wt.id] ?? {})) {
+    codeReviews[k] = {
+      status: r.status,
+      startedAt: r.startedAt,
+      finishedAt: r.finishedAt,
+      heartbeatAt: r.heartbeatAt,
+      open: r.findings.filter((f) => f.status === "open").length,
+      total: r.findings.length,
+      sig: sha1(r.status + (r.message || "") + r.findings.map((f) => f.id + f.status).join()).slice(0, 10)
+    };
+  }
   return {
     id: wt.id,
     path: wt.path,
@@ -1188,15 +1229,7 @@ function publicWorktree(wt) {
     error: wt.error || null,
     busy: wt.busy || null,
     dirtyKind: wt.dirtyKind || null,
-    coderabbit: r ? {
-      status: r.status,
-      startedAt: r.startedAt,
-      finishedAt: r.finishedAt,
-      heartbeatAt: r.heartbeatAt,
-      open: r.findings.filter((f) => f.status === "open").length,
-      total: r.findings.length,
-      sig: sha1(r.status + r.findings.map((f) => f.id + f.status).join()).slice(0, 10)
-    } : null,
+    codeReviews,
     review: {
       reviewedAt: s.reviewedAt || null,
       needsReview: !!wt.fingerprint && (wt.stats?.files || 0) > 0 && s.reviewedFp !== wt.fingerprint
@@ -1205,7 +1238,7 @@ function publicWorktree(wt) {
       draft: mine.filter((c) => c.status === "draft").length,
       waiting: mine.filter((c) => c.status === "pending").length,
       open: mine.filter((c) => c.status === "delivered").length,
-      sig: sha1(mine.map((c) => `${c.id}${c.status}${c.replies.length}${c.body.length}`).join() + state.reviews.filter((r2) => r2.wtId === wt.id).map((r2) => r2.status).join()).slice(0, 10)
+      sig: sha1(mine.map((c) => `${c.id}${c.status}${c.replies.length}${c.body.length}`).join() + state.reviews.filter((r) => r.wtId === wt.id).map((r) => r.status).join()).slice(0, 10)
     }
   };
 }
@@ -1221,13 +1254,15 @@ function publicState() {
       editor: config.editor,
       prPollMinutes: config.prPollMinutes,
       roots: config.roots,
-      extraRepos: config.extraRepos
+      extraRepos: config.extraRepos,
+      reviewEffort: config.reviewEffort
     },
     onboardedAt: state.onboardedAt || null,
     repos: [...repos.values()].map((r) => ({ name: r.name, root: r.root, github: r.gh ? `${r.gh.owner}/${r.gh.name}` : null })),
     coderabbitLogin: crLogin,
     jobs: jobs.filter((j) => !j.dismissed).slice(0, 5),
     coderabbitReady: coderabbitReady(),
+    claudeReady: claudeReady(),
     installedAt: state.installedAt,
     sessions: [...sessions.values()].map((s) => ({ sessionId: s.sessionId, name: s.name, status: s.status, cwd: s.cwd })),
     cleaned: state.cleaned.slice(0, 30),
@@ -1255,57 +1290,20 @@ data: ${json}
 // src/server/routes.ts
 import fs13 from "node:fs";
 
-// src/server/coderabbit.ts
+// src/server/claude-review.ts
+import path8 from "node:path";
+
+// src/server/code-review.ts
 import { spawn as spawn4 } from "node:child_process";
 import fs10 from "node:fs";
 import path7 from "node:path";
-var crChildren = /* @__PURE__ */ new Map();
-async function crUsage(wt) {
-  const r = await probe("coderabbit", ["usage", "--agent"], { cwd: wt.path });
-  const u = rec(rec(lastJson(r.out)).includedReviews);
-  if (u.state !== "available") return null;
-  const { limit, remaining, fullCapacityInMs, rollingWindowMs, repository } = u;
-  if (typeof limit !== "number" || typeof remaining !== "number" || typeof fullCapacityInMs !== "number" || typeof rollingWindowMs !== "number" || typeof repository !== "string") return null;
-  return { limit, remaining, fullInMs: fullCapacityInMs, windowMs: rollingWindowMs, repository };
-}
-var asText = (v) => {
-  if (v == null) return "";
-  if (typeof v === "string") return v;
-  if (Array.isArray(v)) return v.map(asText).filter(Boolean).join("\n\n");
-  if (typeof v === "object") {
-    const o = rec(v);
-    const t = o.text || o.code || o.suggestion || o.diff || o.command;
-    return typeof t === "string" ? t : JSON.stringify(v, null, 2);
-  }
-  return String(v);
-};
-function toFinding(ev) {
-  const start = Number(ev.startLine ?? ev.line ?? ev.lineStart) || null;
-  return {
-    id: newId("f"),
-    severity: String(ev.severity || "info").toLowerCase(),
-    file: asStr(ev.fileName) || asStr(ev.file) || asStr(ev.path) || "",
-    startLine: start,
-    endLine: Number(ev.endLine ?? ev.lineEnd) || start,
-    title: asText(ev.title),
-    comment: asText(ev.comment),
-    codegen: asText(ev.codegenInstructions),
-    suggestions: asText(ev.suggestions),
-    status: "open"
-  };
-}
-async function startCodeRabbit(wt) {
-  const prev = state.coderabbit[wt.id];
-  if (prev?.status === "running") throw httpError(409, "A CodeRabbit review is already running for this worktree.");
-  const integ = await getIntegrations();
-  if (!integ.coderabbit.installed) throw httpError(409, "The CodeRabbit CLI is not installed. See Settings.");
-  if (!integ.coderabbit.authed) throw httpError(409, "Sign in to CodeRabbit in Settings first.");
-  await refreshWorktree(wt);
-  const usage = await crUsage(wt);
-  if (usage && usage.remaining <= 0) {
-    throw httpError(429, `No CodeRabbit reviews left for ${usage.repository} this hour. Try again in about ${Math.ceil(usage.fullInMs / 6e4)} minutes.`);
-  }
+var REVIEWER_NAMES = { coderabbit: "CodeRabbit", claude: "Claude" };
+var isReviewer = (v) => v === "coderabbit" || v === "claude";
+var children = /* @__PURE__ */ new Map();
+var reviewOf = (wtId, reviewer) => state.codeReviews[wtId]?.[reviewer];
+function beginReview(wt, reviewer, extra = {}) {
   const review = {
+    reviewer,
     status: "running",
     startedAt: Date.now(),
     finishedAt: null,
@@ -1315,11 +1313,29 @@ async function startCodeRabbit(wt) {
     reviewedFiles: [],
     error: null,
     heartbeatAt: Date.now(),
-    usage: usage ? { ...usage, remaining: Math.max(0, usage.remaining - 1) } : null
+    usage: null,
+    ...extra
   };
-  state.coderabbit[wt.id] = review;
-  const child = spawn4("coderabbit", ["review", "--agent", "--base", wt.baseRef ?? "", "--include-untracked"], { cwd: wt.path, env: process.env });
-  crChildren.set(wt.id, child);
+  (state.codeReviews[wt.id] ??= {})[reviewer] = review;
+  return review;
+}
+function assertIdle(wt, reviewer) {
+  if (reviewOf(wt.id, reviewer)?.status === "running") throw httpError(409, `A ${REVIEWER_NAMES[reviewer]} review is already running for this worktree.`);
+}
+function addSnippet(wt, f) {
+  try {
+    const lines = fs10.readFileSync(path7.join(wt.path, f.file), "utf8").split("\n");
+    if (f.startLine) f.snippet = lines.slice(f.startLine - 1, Math.min(f.endLine || f.startLine, f.startLine + 4)).join("\n");
+  } catch {
+  }
+  return f;
+}
+function runReview(wt, review, cmd, args, { env = process.env, onEvent, finish }) {
+  const name = REVIEWER_NAMES[review.reviewer];
+  const key = `${wt.id} ${review.reviewer}`;
+  const child = spawn4(cmd, args, { cwd: wt.path, env, stdio: ["ignore", "pipe", "pipe"] });
+  children.set(key, child);
+  if (child.pid) reviewerPids.add(child.pid);
   let buf = "", errText = "";
   const handle = (line) => {
     let parsed;
@@ -1328,21 +1344,8 @@ async function startCodeRabbit(wt) {
     } catch {
       return;
     }
-    const ev = rec(parsed);
     review.heartbeatAt = Date.now();
-    if (ev.type === "finding") {
-      const f = toFinding(ev);
-      try {
-        const lines = fs10.readFileSync(path7.join(wt.path, f.file), "utf8").split("\n");
-        if (f.startLine) f.snippet = lines.slice(f.startLine - 1, Math.min(f.endLine || f.startLine, f.startLine + 4)).join("\n");
-      } catch {
-      }
-      review.findings.push(f);
-    } else if (ev.type === "complete") {
-      review.reviewedFiles = isStringArray(ev.reviewedFiles) ? ev.reviewedFiles : [];
-      review.message = asStr(ev.message);
-    } else if (ev.type === "error") review.error = asStr(ev.message) || asStr(ev.error) || "CodeRabbit reported an error.";
-    else if (ev.type === "status" && ev.message) review.message = asStr(ev.message);
+    onEvent(rec(parsed));
     save();
     changed();
   };
@@ -1365,48 +1368,52 @@ async function startCodeRabbit(wt) {
   });
   child.on("close", (code, signal) => {
     if (buf.trim()) handle(buf);
-    crChildren.delete(wt.id);
+    children.delete(key);
+    if (child.pid) reviewerPids.delete(child.pid);
     review.finishedAt = Date.now();
     if (review.status === "cancelled") {
-    } else if (code === 0 && !review.error) review.status = "done";
-    else {
-      review.status = "failed";
-      review.error ||= signal ? `Stopped (${signal}).` : errText.trim().split("\n").pop() || `CodeRabbit exited with code ${code}.`;
+    } else {
+      if (code === 0) finish?.();
+      if (code === 0 && !review.error) review.status = "done";
+      else {
+        review.status = "failed";
+        review.error ||= signal ? `Stopped (${signal}).` : errText.trim().split("\n").pop() || `${name} exited with code ${code}.`;
+      }
     }
-    log(`CodeRabbit review ${review.status} for ${wt.path}: ${review.findings.length} findings`);
+    log(`${name} review ${review.status} for ${wt.path}: ${review.findings.length} findings`);
     save();
     changed();
   });
   save();
   changed();
-  return review;
 }
-function cancelCodeRabbit(wtId) {
-  const r = wtId === void 0 ? void 0 : state.coderabbit[wtId];
-  const child = wtId === void 0 ? void 0 : crChildren.get(wtId);
+function cancelReview(wtId, reviewer) {
+  const r = wtId === void 0 ? void 0 : reviewOf(wtId, reviewer);
   if (!r || r.status !== "running") throw httpError(409, "No review is running.");
   r.status = "cancelled";
-  r.error = "Cancelled. CodeRabbit discards a review that is stopped early.";
-  child?.kill();
+  r.error = reviewer === "coderabbit" ? "Cancelled. CodeRabbit discards a review that is stopped early." : "Cancelled.";
+  children.get(`${wtId} ${reviewer}`)?.kill();
   save();
   changed();
 }
 function getFinding(fid) {
-  for (const [wtId, r] of Object.entries(state.coderabbit)) {
-    const f = r.findings?.find((x) => x.id === fid);
-    if (f) return { wtId, review: r, finding: f };
+  for (const [wtId, byReviewer] of Object.entries(state.codeReviews)) {
+    for (const r of Object.values(byReviewer)) {
+      const f = r.findings.find((x) => x.id === fid);
+      if (f) return { wtId, review: r, finding: f };
+    }
   }
   throw httpError(404, "Unknown finding");
 }
 function findingToComment(wtId, f) {
   const wt = getWt(wtId);
-  const parts = [`**CodeRabbit (${f.severity})${f.title ? `: ${f.title}` : ""}**`];
+  const parts = [`**${REVIEWER_NAMES[f.source]} (${f.severity})${f.title ? `: ${f.title}` : ""}**`];
   if (f.comment && f.comment !== f.title) parts.push(f.comment);
   if (f.suggestions) parts.push(`Suggested change:
 \`\`\`
 ${f.suggestions}
 \`\`\``);
-  if (f.codegen && f.codegen !== f.comment) parts.push(`Fix guidance from CodeRabbit:
+  if (f.codegen && f.codegen !== f.comment) parts.push(`Fix guidance from ${REVIEWER_NAMES[f.source]}:
 ${f.codegen}`);
   const c = {
     id: newId("c"),
@@ -1433,14 +1440,180 @@ ${f.codegen}`);
   return c;
 }
 
+// src/server/claude-review.ts
+var SEVERITIES = ["critical", "major", "minor", "info"];
+var SCHEMA = {
+  type: "object",
+  properties: {
+    findings: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          file: { type: "string" },
+          startLine: { type: "integer" },
+          endLine: { type: "integer" },
+          severity: { type: "string", enum: SEVERITIES },
+          title: { type: "string" },
+          comment: { type: "string" },
+          suggestion: { type: "string", description: "Replacement code, when there is an obvious fix" }
+        },
+        required: ["file", "startLine", "severity", "title", "comment"]
+      }
+    }
+  },
+  required: ["findings"]
+};
+var prompt = (base) => `Run the code-review skill (Skill tool, args: "${base}") on this worktree: its changes against ${base}, including uncommitted and untracked files. Don't change any files. Then return every finding it reports as structured output, with file paths relative to the repository root and line numbers in the current version of each file.`;
+var SESSION_VARS = /^(CLAUDECODE|CLAUDE_PID|CLAUDE_EFFORT|CLAUDE_CODE_(ENTRYPOINT|SESSION_ID|SESSION_ATTENDED|CHILD_SESSION|MESSAGING_\w+))$/;
+var reviewerEnv = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => !SESSION_VARS.test(k)));
+function activity(wt, name, input) {
+  const file = asStr(input.file_path);
+  if (name === "Skill") return "Starting the review";
+  if (name === "Read" && file) return `Reading ${path8.relative(wt.path, path8.resolve(wt.path, file))}`;
+  if (name === "Bash") return `Running ${(asStr(input.command) || "").split("\n")[0]?.slice(0, 80)}`;
+  if (name === "Grep" || name === "Glob") return "Searching the code";
+  if (name === "Task" || name === "Agent") return asStr(input.description) || "Starting a sub-agent";
+  if (name === "StructuredOutput") return "Writing up findings";
+  return name;
+}
+function toFinding(wt, v) {
+  const o = rec(v);
+  const raw = asStr(o.file) || "";
+  const start = Number(o.startLine) || null;
+  const severity = String(o.severity || "info").toLowerCase();
+  return {
+    id: newId("f"),
+    source: "claude",
+    severity: SEVERITIES.includes(severity) ? severity : "info",
+    file: path8.isAbsolute(raw) ? path8.relative(wt.path, raw) : raw,
+    startLine: start,
+    endLine: Number(o.endLine) || start,
+    title: asStr(o.title) || "",
+    comment: asStr(o.comment) || "",
+    codegen: "",
+    suggestions: asStr(o.suggestion) || "",
+    status: "open"
+  };
+}
+async function startClaudeReview(wt, effort = config.reviewEffort) {
+  assertIdle(wt, "claude");
+  if (!isEffort(effort)) throw httpError(400, `Unknown effort: ${String(effort)}`);
+  const integ = await getIntegrations();
+  if (!integ.claude.cliVersion) throw httpError(409, "The claude CLI was not found. See Settings.");
+  await refreshWorktree(wt);
+  const base = wt.baseRef;
+  if (!base) throw httpError(409, "This worktree has nothing to compare with yet.");
+  const review = beginReview(wt, "claude", { effort, costUsd: null });
+  let reported = false;
+  runReview(wt, review, claudeBin(), [
+    "-p",
+    prompt(base),
+    // Leaves out the user's own skills (a personal "code-review" would shadow the built-in one), plugins and hooks, this plugin's too.
+    "--safe-mode",
+    "--no-session-persistence",
+    "--effort",
+    effort,
+    "--disallowed-tools",
+    "Edit Write NotebookEdit",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--json-schema",
+    JSON.stringify(SCHEMA)
+  ], {
+    env: reviewerEnv(),
+    onEvent: (ev) => {
+      if (ev.type === "assistant") {
+        const content = rec(ev.message).content;
+        for (const c of Array.isArray(content) ? content : []) {
+          const block = rec(c);
+          if (block.type === "tool_use") review.message = activity(wt, asStr(block.name) || "", rec(block.input));
+        }
+      } else if (ev.type === "result") {
+        reported = true;
+        if (typeof ev.total_cost_usd === "number") review.costUsd = ev.total_cost_usd;
+        const findings = rec(ev.structured_output).findings;
+        if (ev.is_error || ev.subtype !== "success") review.error = asStr(ev.result) || `Claude stopped early (${asStr(ev.subtype) || "error"}).`;
+        else if (!Array.isArray(findings)) review.error = "Claude finished without reporting its findings in a form this page can show.";
+        else review.findings = findings.map((f) => addSnippet(wt, toFinding(wt, f)));
+      }
+    },
+    finish: () => {
+      if (!reported) review.error ||= "Claude exited without a result.";
+    }
+  });
+  return review;
+}
+
+// src/server/coderabbit.ts
+async function crUsage(wt) {
+  const r = await probe("coderabbit", ["usage", "--agent"], { cwd: wt.path });
+  const u = rec(rec(lastJson(r.out)).includedReviews);
+  if (u.state !== "available") return null;
+  const { limit, remaining, fullCapacityInMs, rollingWindowMs, repository } = u;
+  if (typeof limit !== "number" || typeof remaining !== "number" || typeof fullCapacityInMs !== "number" || typeof rollingWindowMs !== "number" || typeof repository !== "string") return null;
+  return { limit, remaining, fullInMs: fullCapacityInMs, windowMs: rollingWindowMs, repository };
+}
+var asText = (v) => {
+  if (v == null) return "";
+  if (typeof v === "string") return v;
+  if (Array.isArray(v)) return v.map(asText).filter(Boolean).join("\n\n");
+  if (typeof v === "object") {
+    const o = rec(v);
+    const t = o.text || o.code || o.suggestion || o.diff || o.command;
+    return typeof t === "string" ? t : JSON.stringify(v, null, 2);
+  }
+  return String(v);
+};
+function toFinding2(ev) {
+  const start = Number(ev.startLine ?? ev.line ?? ev.lineStart) || null;
+  return {
+    id: newId("f"),
+    source: "coderabbit",
+    severity: String(ev.severity || "info").toLowerCase(),
+    file: asStr(ev.fileName) || asStr(ev.file) || asStr(ev.path) || "",
+    startLine: start,
+    endLine: Number(ev.endLine ?? ev.lineEnd) || start,
+    title: asText(ev.title),
+    comment: asText(ev.comment),
+    codegen: asText(ev.codegenInstructions),
+    suggestions: asText(ev.suggestions),
+    status: "open"
+  };
+}
+async function startCodeRabbit(wt) {
+  assertIdle(wt, "coderabbit");
+  const integ = await getIntegrations();
+  if (!integ.coderabbit.installed) throw httpError(409, "The CodeRabbit CLI is not installed. See Settings.");
+  if (!integ.coderabbit.authed) throw httpError(409, "Sign in to CodeRabbit in Settings first.");
+  await refreshWorktree(wt);
+  const usage = await crUsage(wt);
+  if (usage && usage.remaining <= 0) {
+    throw httpError(429, `No CodeRabbit reviews left for ${usage.repository} this hour. Try again in about ${Math.ceil(usage.fullInMs / 6e4)} minutes.`);
+  }
+  const review = beginReview(wt, "coderabbit", { usage: usage ? { ...usage, remaining: Math.max(0, usage.remaining - 1) } : null });
+  runReview(wt, review, "coderabbit", ["review", "--agent", "--base", wt.baseRef ?? "", "--include-untracked"], {
+    onEvent: (ev) => {
+      if (ev.type === "finding") review.findings.push(addSnippet(wt, toFinding2(ev)));
+      else if (ev.type === "complete") {
+        review.reviewedFiles = isStringArray(ev.reviewedFiles) ? ev.reviewedFiles : [];
+        review.message = asStr(ev.message);
+      } else if (ev.type === "error") review.error = asStr(ev.message) || asStr(ev.error) || "CodeRabbit reported an error.";
+      else if (ev.type === "status" && ev.message) review.message = asStr(ev.message);
+    }
+  });
+  return review;
+}
+
 // src/server/diffs.ts
 import fs11 from "node:fs";
-import path8 from "node:path";
+import path9 from "node:path";
 async function snapshotTree(wt) {
   if (wt.snap && wt.snap.fp === wt.fingerprint) return wt.snap.tree;
   const fp = wt.fingerprint;
-  const index = path8.resolve(wt.path, (await git(wt.path, ["rev-parse", "--git-path", "index"])).trim());
-  const tmp = path8.join(TMP_DIR, `${wt.id}-${Date.now()}.index`);
+  const index = path9.resolve(wt.path, (await git(wt.path, ["rev-parse", "--git-path", "index"])).trim());
+  const tmp = path9.join(TMP_DIR, `${wt.id}-${Date.now()}.index`);
   try {
     try {
       fs11.copyFileSync(index, tmp);
@@ -1499,7 +1672,7 @@ async function blameWorktree(wt, mergeBase, files, commits) {
   const byShaN = new Map(commits.map((c) => [c.sha, c.n]));
   const result = {};
   await Promise.all(files.slice(0, 200).map(async (file) => {
-    const abs = path8.join(wt.path, file);
+    const abs = path9.join(wt.path, file);
     try {
       if (fs11.statSync(abs).size > 2 * 1024 * 1024) return;
     } catch {
@@ -1622,8 +1795,8 @@ async function getDiff(wt, mode) {
 var UNCOMMITTED = "0".repeat(40);
 async function getFileBlame(wt, file) {
   await refreshWorktree(wt);
-  const abs = path8.resolve(wt.path, file);
-  if (!file || !abs.startsWith(wt.path + path8.sep)) throw httpError(400, "Not a file in this worktree");
+  const abs = path9.resolve(wt.path, file);
+  if (!file || !abs.startsWith(wt.path + path9.sep)) throw httpError(400, "Not a file in this worktree");
   let size;
   try {
     size = fs11.statSync(abs).size;
@@ -1756,7 +1929,7 @@ function claimReviews({ session_id, cwd }) {
 
 // src/server/settings.ts
 import fs12 from "node:fs";
-import path9 from "node:path";
+import path10 from "node:path";
 var isIntIn = (v, min, max) => Number.isInteger(v) && v >= min && v <= max;
 async function updateConfig(body) {
   const patch = isRecord(body) ? body : {};
@@ -1785,6 +1958,12 @@ async function updateConfig(body) {
         continue;
       }
       config.editor = v;
+    } else if (k === "reviewEffort") {
+      if (!isEffort(v)) {
+        errors.push(`Invalid value for ${k}`);
+        continue;
+      }
+      config.reviewEffort = v;
     } else if (k === "recentDays") {
       if (!isIntIn(v, 1, 90)) {
         errors.push(`Invalid value for ${k}`);
@@ -1806,19 +1985,19 @@ async function updateConfig(body) {
 }
 var SKIP_DIRS = /* @__PURE__ */ new Set(["node_modules", ".git", ".Trash", "Library", ".cache", ".npm", ".pnpm-store"]);
 function listDir(p, showHidden) {
-  const full = path9.resolve(expand(p || "~"));
-  if (full !== HOME && !full.startsWith(HOME + path9.sep)) throw httpError(403, "Only folders inside your home directory can be browsed.");
+  const full = path10.resolve(expand(p || "~"));
+  if (full !== HOME && !full.startsWith(HOME + path10.sep)) throw httpError(403, "Only folders inside your home directory can be browsed.");
   let dirents;
   try {
     dirents = fs12.readdirSync(full, { withFileTypes: true });
   } catch {
     throw httpError(404, `Can't open ${full}`);
   }
-  const isRepo = (d) => fs12.existsSync(path9.join(d, ".git"));
+  const isRepo = (d) => fs12.existsSync(path10.join(d, ".git"));
   const entries = [];
   for (const e of dirents) {
     if (SKIP_DIRS.has(e.name) || !showHidden && e.name.startsWith(".")) continue;
-    const child = path9.join(full, e.name);
+    const child = path10.join(full, e.name);
     let dir = e.isDirectory();
     if (!dir && e.isSymbolicLink()) {
       try {
@@ -1833,8 +2012,8 @@ function listDir(p, showHidden) {
   entries.sort((a, b) => a.name.localeCompare(b.name, void 0, { sensitivity: "base" }));
   return {
     path: full,
-    display: full === HOME ? "~" : full.startsWith(HOME + path9.sep) ? "~" + full.slice(HOME.length) : full,
-    parent: full === HOME ? null : path9.dirname(full),
+    display: full === HOME ? "~" : full.startsWith(HOME + path10.sep) ? "~" + full.slice(HOME.length) : full,
+    parent: full === HOME ? null : path10.dirname(full),
     isRepo: isRepo(full),
     repoChildren: entries.filter((e) => e.isRepo).length,
     entries
@@ -1932,14 +2111,20 @@ var routes = [
     await updateConfig(body);
     return { ok: true };
   }],
-  ["GET", /^\/api\/worktrees\/(\w+)\/coderabbit$/, async (m, _body, url) => {
+  ["GET", /^\/api\/worktrees\/(\w+)\/code-reviews$/, async (m, _body, url) => {
     const wt = getWt(arg(m));
-    const review = state.coderabbit[wt.id] || null;
-    return { review, usage: url.searchParams.has("usage") ? await crUsage(wt) : review?.usage || null };
+    const reviews = state.codeReviews[wt.id] ?? {};
+    return { reviews, usage: url.searchParams.has("usage") ? await crUsage(wt) : reviews.coderabbit?.usage || null };
   }],
-  ["POST", /^\/api\/worktrees\/(\w+)\/coderabbit$/, (m) => startCodeRabbit(getWt(arg(m)))],
-  ["POST", /^\/api\/worktrees\/(\w+)\/coderabbit\/cancel$/, (m) => {
-    cancelCodeRabbit(arg(m));
+  ["POST", /^\/api\/worktrees\/(\w+)\/code-review$/, (m, raw) => {
+    const body = bodyOf(raw);
+    const wt = getWt(arg(m));
+    if (body.reviewer === "coderabbit") return startCodeRabbit(wt);
+    if (body.reviewer === "claude") return startClaudeReview(wt, body.effort);
+    throw httpError(400, "Choose a reviewer: coderabbit or claude.");
+  }],
+  ["POST", /^\/api\/worktrees\/(\w+)\/code-review\/(coderabbit|claude)\/cancel$/, (m) => {
+    cancelReview(arg(m), arg(m, 2));
     return { ok: true };
   }],
   ["POST", /^\/api\/findings\/(\w+)\/(send|dismiss|restore)$/, (m) => {
@@ -1951,9 +2136,10 @@ var routes = [
     changed();
     return finding;
   }],
-  ["POST", /^\/api\/worktrees\/(\w+)\/coderabbit\/send-all$/, (m) => {
+  ["POST", /^\/api\/worktrees\/(\w+)\/code-review\/(coderabbit|claude)\/send-all$/, (m) => {
     const wt = getWt(arg(m));
-    const r = state.coderabbit[wt.id];
+    const reviewer = arg(m, 2);
+    const r = isReviewer(reviewer) ? reviewOf(wt.id, reviewer) : void 0;
     const open = (r?.findings || []).filter((f) => f.status === "open");
     for (const f of open) findingToComment(wt.id, f);
     save();
@@ -2138,11 +2324,11 @@ data: ${JSON.stringify(publicState())}
     return;
   }
   const file = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
-  const full = path10.join(HERE, "public", path10.normalize(file));
-  if (!full.startsWith(path10.join(HERE, "public"))) return sendRaw(res, 403, "Forbidden", "text/plain");
+  const full = path11.join(HERE, "public", path11.normalize(file));
+  if (!full.startsWith(path11.join(HERE, "public"))) return sendRaw(res, 403, "Forbidden", "text/plain");
   fs14.readFile(full, (err, data) => {
     if (err) return sendRaw(res, 404, "Not found", "text/plain");
-    sendRaw(res, 200, data, MIME[path10.extname(full)] || "application/octet-stream");
+    sendRaw(res, 200, data, MIME[path11.extname(full)] || "application/octet-stream");
   });
 });
 
