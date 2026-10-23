@@ -2,11 +2,11 @@ import { spawn, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import type { CodeReview, Comment, Finding, Reviewer } from '../shared/api.ts';
-import { httpError } from './exec.ts';
+import { errInfo, httpError } from './exec.ts';
 import { changed, reviewerPids, save, state } from './state.ts';
 import type { WorktreeRecord } from './types.ts';
 import { log, newId, rec } from './util.ts';
-import { getWt } from './worktrees.ts';
+import { contentTree, getWt } from './worktrees.ts';
 
 // ---------- code reviews: what CodeRabbit and Claude share ----------
 // Each reviewer keeps its own latest review per worktree, so running one never discards the other's findings.
@@ -30,6 +30,31 @@ export function beginReview(wt: WorktreeRecord, reviewer: Reviewer, extra: Parti
 
 export function assertIdle(wt: WorktreeRecord, reviewer: Reviewer): void {
   if (reviewOf(wt.id, reviewer)?.status === 'running') throw httpError(409, `A ${REVIEWER_NAMES[reviewer]} review is already running for this worktree.`);
+}
+
+/**
+ * Answers the request at once with the review already running, so the page shows it the moment you click, then does
+ * the slower set-up (checking the CLI, refreshing the worktree, CodeRabbit's allowance) and starts the reviewer.
+ * A problem found on the way fails the review with its message.
+ */
+export function startInBackground(wt: WorktreeRecord, review: CodeReview, setUp: () => Promise<void>, run: () => void): void {
+  save();
+  changed();
+  setUp().then(async () => {
+    if (review.status !== 'running') return; // cancelled while setting up
+    review.baseRef = wt.baseRef;
+    review.fingerprint = wt.fingerprint;
+    review.contentTree = wt.contentTree = await contentTree(wt);
+    if (review.status === 'running') run();
+  }).catch((e: unknown) => {
+    if (review.status !== 'running') return;
+    review.status = 'failed';
+    review.error = errInfo(e).message || `${REVIEWER_NAMES[review.reviewer]} couldn't start.`;
+    review.finishedAt = Date.now();
+    log(`${REVIEWER_NAMES[review.reviewer]} review couldn't start for ${wt.path}: ${review.error}`);
+    save();
+    changed();
+  });
 }
 
 /** The first few lines a finding points at, to show next to it in the panel. */

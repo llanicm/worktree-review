@@ -71,6 +71,8 @@ export interface WorktreeRecord {
   nextCheck: number;
   sessions: SessionRecord[];
   agents: AgentRef[];
+  /** The files' tree hash, kept while a finished review has one to compare with. */
+  contentTree?: string | null;
   sessionSig?: string;
   pr?: PRNode | null;
   headInMerged: boolean | null;

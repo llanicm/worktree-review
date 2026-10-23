@@ -303,6 +303,40 @@ test('Claude reviews: effort, findings, cancelling, and the reviewer is not a se
   assert.deepEqual([cancelled.status, cancelled.effort], ['cancelled', 'max']);
 });
 
+test('starting a review answers at once, and a problem found while setting up fails it', async () => {
+  const wt = await wtBy('fix/tax-rounding');
+  const usage = path.join(DEMO, 'home', '.cr-usage.json');
+  fs.writeFileSync(usage, JSON.stringify({ ms: 1500, remaining: 0 }));
+  try {
+    const t = Date.now();
+    const started = await post(`/api/worktrees/${wt.id}/code-review`, { reviewer: 'coderabbit' });
+    assert.ok(Date.now() - t < 1000, `answered in ${Date.now() - t}ms, before CodeRabbit's allowance was checked`);
+    assert.equal(started.status, 'running');
+    assert.equal((await api('POST', `/api/worktrees/${wt.id}/code-review`, { reviewer: 'coderabbit' })).status, 409, 'already running while it sets up');
+    await until(async () => (await wtBy('fix/tax-rounding')).codeReviews.coderabbit.status === 'failed', 'the review to fail');
+    const { reviews } = await get(`/api/worktrees/${wt.id}/code-reviews`);
+    assert.match(reviews.coderabbit.error, /No CodeRabbit reviews left for acme\/shop this hour/);
+  } finally {
+    fs.rmSync(usage, { force: true });
+  }
+});
+
+test('a review goes stale only when the files themselves change', async () => {
+  const branch = 'feat/checkout-discounts';
+  const wt = await wtBy(branch);
+  assert.equal(wt.codeReviews.claude.stale, false);
+  const file = path.join(wt.path, 'src/checkout.ts'); // uncommitted, so touching it changes the worktree's fingerprint
+  const text = fs.readFileSync(file, 'utf8');
+  const later = new Date(Date.now() + 60_000);
+  fs.utimesSync(file, later, later);
+  await until(async () => (await wtBy(branch)).fingerprint !== wt.fingerprint, 'the touched file to be noticed');
+  assert.equal((await wtBy(branch)).codeReviews.claude.stale, false, 'touching a file is not changing it');
+  fs.writeFileSync(file, `${text}// one more line\n`);
+  await until(async () => (await wtBy(branch)).codeReviews.claude.stale, 'the edit to make the review stale');
+  fs.writeFileSync(file, text);
+  await until(async () => !(await wtBy(branch)).codeReviews.claude.stale, 'undoing the edit to make it current again');
+});
+
 test('settings: integrations, config, folders, onboarding', async () => {
   const integ = await get('/api/integrations');
   assert.equal(integ.gh.authed, true);

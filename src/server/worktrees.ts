@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import type { BaseChoices, DirtyKind } from '../shared/api.ts';
 import { explainWorktreeError, git, gitError, httpError } from './exec.ts';
@@ -166,6 +167,7 @@ export function refreshWorktree(wt: WorktreeRecord, { force = false } = {}): Pro
     const fp = sha1([head, base.ref, baseSha, status, ...stamps].join('|'));
     if (fp !== wt.fingerprint || force) {
       wt.fingerprint = fp;
+      if (Object.values(state.codeReviews[wt.id] ?? {}).some((r) => r?.contentTree)) wt.contentTree = await contentTree(wt);
       wt.baseRef = base.ref;
       wt.baseSource = base.source;
       try {
@@ -194,6 +196,27 @@ export function refreshWorktree(wt: WorktreeRecord, { force = false } = {}): Pro
   })().finally(() => { wt.checking = null; });
   wt.checking = checking;
   return checking;
+}
+
+/**
+ * Git's tree hash of the worktree's files as they are on disk, tracked and untracked (not ignored ones). It changes only when
+ * a file's contents do: committing them, fetching a new base or touching a file leaves it alone. Built in a copy of the index,
+ * so git's own is never changed.
+ */
+export async function contentTree(wt: WorktreeRecord): Promise<string | null> {
+  const tmp = path.join(os.tmpdir(), `wtr-index-${process.pid}-${wt.id}`);
+  try {
+    const index = (await git(wt.path, ['rev-parse', '--path-format=absolute', '--git-path', 'index'])).trim();
+    // The copy keeps git's record of which files are unchanged, so only changed ones are read.
+    try { fs.copyFileSync(index, tmp); } catch { fs.rmSync(tmp, { force: true }); }
+    const env = { GIT_INDEX_FILE: tmp };
+    await git(wt.path, ['add', '-A'], { env });
+    return (await git(wt.path, ['write-tree'], { env })).trim() || null;
+  } catch {
+    return null;
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
 }
 
 function isActive(wt: WorktreeRecord): boolean {
