@@ -1,5 +1,18 @@
 # Changelog
 
+## [2.4.0](https://github.com/llanicm/worktree-review/compare/v2.3.0...v2.4.0) (2026-10-23)
+
+
+### Features
+
+* list review findings as links and read them in the code ([#16](https://github.com/llanicm/worktree-review/issues/16)) ([7019d03](https://github.com/llanicm/worktree-review/commit/7019d03be98aaf4288c93e3b4e0cf3709f4f5580))
+
+
+### Bug fixes
+
+* link sessions only where they work, and show merged PRs on the main checkout ([#15](https://github.com/llanicm/worktree-review/issues/15)) ([86b886c](https://github.com/llanicm/worktree-review/commit/86b886c39e08cf813d85ab1e856387e4edcc2b54))
+* start reviews instantly, and only flag them as out of date when the code changes ([#17](https://github.com/llanicm/worktree-review/issues/17)) ([6104c28](https://github.com/llanicm/worktree-review/commit/6104c28a81cf80df1bf3fc20cbb932fc4c87eed7))
+
 ## [2.3.0](https://github.com/llanicm/worktree-review/compare/v2.2.0...v2.3.0) (2026-10-23)
 
 
