@@ -12,16 +12,21 @@ import { sha1 } from './util.ts';
 
 // ---------- public state & SSE ----------
 
+// Most serious first.
+const SEVERITIES = ['critical', 'major', 'minor', 'trivial', 'info'];
+
 function publicWorktree(wt: WorktreeRecord): Worktree {
   const s: Partial<WorktreeState> = state.worktrees[wt.id] ?? {};
   const mine = state.comments.filter((c) => c.wtId === wt.id);
   const codeReviews: Partial<Record<Reviewer, CodeReviewSummary>> = {};
   for (const [k, r] of Object.entries(state.codeReviews[wt.id] ?? {}) as [Reviewer, NonNullable<State['codeReviews'][string][Reviewer]>][]) {
     // Stale only when the files' contents changed, not when the base moved or changes were committed.
+    const open = r.findings.filter((f) => f.status === 'open');
+    const worst = SEVERITIES.find((sev) => open.some((f) => f.severity === sev)) ?? (open.length ? 'none' : null);
     const stale = r.status !== 'running' && !!r.contentTree && !!wt.contentTree && r.contentTree !== wt.contentTree;
     codeReviews[k] = {
       status: r.status, startedAt: r.startedAt, finishedAt: r.finishedAt, heartbeatAt: r.heartbeatAt,
-      open: r.findings.filter((f) => f.status === 'open').length, total: r.findings.length, stale,
+      open: open.length, total: r.findings.length, stale, worst,
       sig: sha1(r.status + (r.message || '') + stale + r.findings.map((f) => f.id + f.status).join()).slice(0, 10),
     };
   }

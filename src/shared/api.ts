@@ -116,6 +116,8 @@ export interface CodeReviewSummary {
   sig: string;
   /** The files have changed since the review, so its line numbers may be off. */
   stale: boolean;
+  /** The most serious severity among the open findings, if any. */
+  worst: string | null;
 }
 
 export interface DiffStats {

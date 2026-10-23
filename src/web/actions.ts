@@ -264,7 +264,7 @@ export const actions: Record<string, Action> = {
       reviewer, status: 'running', startedAt: now, finishedAt: null, baseRef: wt.baseRef, fingerprint: wt.fingerprint,
       findings: [], reviewedFiles: [], error: null, heartbeatAt: now, usage: null, effort: reviewer === 'claude' ? effort : undefined, message: 'Starting',
     };
-    wt.codeReviews[reviewer] = { status: 'running', startedAt: now, finishedAt: null, heartbeatAt: now, open: 0, total: 0, sig: 'starting', stale: false };
+    wt.codeReviews[reviewer] = { status: 'running', startedAt: now, finishedAt: null, heartbeatAt: now, open: 0, total: 0, sig: 'starting', stale: false, worst: null };
     S.reviewMenu = null;
     indexFindings();
     renderMain();
