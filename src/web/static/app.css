@@ -426,11 +426,19 @@ table.kv td:first-child { color: var(--fg-muted); white-space: nowrap; }
 .verdict { font-size: 13px; color: var(--fg-muted); }
 .verdict strong { color: var(--fg); font-family: var(--mono); font-size: 12px; }
 
-/* ---------- CodeRabbit ---------- */
-:root { --rabbit: #e8590c; --rabbit-soft: #fff4e6; }
-@media (prefers-color-scheme: dark) { :root { --rabbit: #ff8c42; --rabbit-soft: #2b1d12; } }
+/* ---------- code reviews: CodeRabbit, and Claude in its own colour ---------- */
+:root { --rabbit: #e8590c; --rabbit-soft: #fff4e6; --reviewer-claude: #8250df; --reviewer-claude-soft: #fbefff; }
+@media (prefers-color-scheme: dark) { :root { --rabbit: #ff8c42; --rabbit-soft: #2b1d12; --reviewer-claude: #ab7df8; --reviewer-claude-soft: #231a33; } }
 .chip.cr { color: var(--rabbit); border-color: currentColor; }
-.cr-btn { color: var(--rabbit); border-color: var(--rabbit); }
+.review-run { position: relative; display: inline-flex; }
+.review-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; width: 320px; max-width: calc(100vw - 32px); display: grid; gap: 10px;
+  padding: 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); font-size: 13px; }
+.review-menu-title { font-weight: 600; }
+.review-menu .choice { display: flex; gap: 8px; align-items: flex-start; cursor: pointer; }
+.review-menu .choice input { margin-top: 3px; }
+.review-menu .setting { margin: 0; }
+.review-menu p { margin: 0; }
+.review-menu .actions { justify-content: flex-end; }
 .cr-running { display: inline-flex; gap: 6px; align-items: center; font-size: 13px; color: var(--rabbit); }
 .cr-elapsed { font-family: var(--mono); font-size: 12px; }
 .cr-panel { border-color: var(--rabbit); }
@@ -439,6 +447,11 @@ table.kv td:first-child { color: var(--fg-muted); white-space: nowrap; }
 .cr-finding { border-left: 3px solid var(--rabbit); }
 .cr-finding.dismissed, .cr-finding.sent { opacity: .6; }
 .cr-name { color: var(--rabbit) !important; }
+.cr-running.claude { color: var(--reviewer-claude); }
+.cr-panel.claude { border-color: var(--reviewer-claude); }
+.cr-panel.claude > .panel-head { background: var(--reviewer-claude-soft); border-bottom-color: var(--reviewer-claude); }
+.cr-finding.claude { border-left-color: var(--reviewer-claude); }
+.cr-finding.claude .cr-name { color: var(--reviewer-claude) !important; }
 .cr-title { font-weight: 600; margin: 2px 0 4px; }
 .cr-finding details { margin-top: 6px; font-size: 12px; }
 .cr-finding summary { cursor: pointer; color: var(--fg-muted); }

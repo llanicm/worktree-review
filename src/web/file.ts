@@ -1,6 +1,6 @@
 // ---------- diff files, line comments ----------
 import type { Comment, FileBlame, Finding } from '../shared/api.ts';
-import { findingHtml } from './coderabbit.ts';
+import { findingHtml, findingsOf } from './code-review.ts';
 import { hl, keyOf, langFor, sameCommit } from './diff.ts';
 import { curWt, S, view } from './state.ts';
 import type { View, ViewFile } from './types.ts';
@@ -123,7 +123,7 @@ export function renderFile(f: ViewFile, byAnchor: Map<string, Comment[]>) {
   const shown = shownKeys(f);
   const mine = (v.comments || []).filter((c) => c.file === f.path && sameCommit(c.commit, f.commit) && c.status !== 'resolved');
   const outsideComments = mine.filter((c) => !shown.has(keyOf(c.file, c.side, c.line, c.commit)));
-  const fileFindings = f.commit ? [] : (v.cr?.findings || []).filter((x) => x.file === f.path && x.status === 'open');
+  const fileFindings = f.commit ? [] : findingsOf(v).filter((x) => x.file === f.path && x.status === 'open');
   const outsideFindings = fileFindings.filter((x) => !shown.has(keyOf(x.file, 'new', x.endLine || x.startLine)));
   const nOpen = mine.length + fileFindings.length;
   const touched = !f.commit ? fileCommitsOf(f.path) : [];

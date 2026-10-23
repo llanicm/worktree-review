@@ -1,5 +1,6 @@
 // ---------- sidebar ----------
 import type { PullRequest, Session, SessionRef, Worktree } from '../shared/api.ts';
+import { NAMES, REVIEWERS } from './code-review.ts';
 import { renderJobs } from './jobs.ts';
 import { need, S, st } from './state.ts';
 import { ago, esc, md, shortPath } from './util.ts';
@@ -36,6 +37,13 @@ export function sessionChip(s: SessionRef | Session) {
   return `<span class="chip" title="Claude session ${esc(s.name)} is ${esc(s.status)}"><span class="dot ${esc(s.status)}"></span>${esc(s.name)}</span>`;
 }
 
+function reviewChip(wt: Worktree) {
+  const running = REVIEWERS.filter((k) => wt.codeReviews[k]?.status === 'running');
+  if (running.length) return `<span class="chip cr"><span class="dot busy"></span>${running.map((k) => NAMES[k]).join(', ')}</span>`;
+  const open = REVIEWERS.reduce((n, k) => n + (wt.codeReviews[k]?.open || 0), 0);
+  return open ? `<span class="chip cr">${open} finding${open === 1 ? '' : 's'}</span>` : '';
+}
+
 function wtItem(wt: Worktree, showNew?: boolean) {
   const name = wt.branch || `detached @ ${wt.head?.slice(0, 8) || '?'}`;
   const c = wt.comments;
@@ -58,8 +66,7 @@ function wtItem(wt: Worktree, showNew?: boolean) {
         : wt.dirtyKind === 'lockfile-only' ? '<span class="chip" title="Only a lockfile changed">lockfile changed</span>'
         : wt.dirtyKind === 'deleted-only' ? `<span class="chip" title="Tracked files missing from disk; nothing is lost">${wt.dirty} missing</span>`
         : wt.dirty ? `<span class="chip" title="Uncommitted changes">${wt.dirty} uncommitted</span>` : ''}
-      ${wt.coderabbit?.status === 'running' ? '<span class="chip cr"><span class="dot busy"></span>CodeRabbit</span>'
-        : wt.coderabbit?.open ? `<span class="chip cr">${wt.coderabbit.open} finding${wt.coderabbit.open === 1 ? '' : 's'}</span>` : ''}
+      ${reviewChip(wt)}
     </div>
   </a>`;
 }

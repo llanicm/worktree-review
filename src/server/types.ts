@@ -1,8 +1,8 @@
 // The server's internal records: what it keeps in memory and persists. The shapes it sends to
 // the page are in ../shared/api.ts.
 import type {
-  CleanedEntry, CodeRabbitReview, Comment, DiffStats, DirtyFile, DirtyKind, PRState,
-  Review, Session, UnmatchedCommit, WorktreeError,
+  CleanedEntry, CodeReview, Comment, DiffStats, DirtyFile, DirtyKind, PRState,
+  Review, Reviewer, Session, UnmatchedCommit, WorktreeError,
 } from '../shared/api.ts';
 
 export interface Repo {
@@ -97,6 +97,6 @@ export interface State {
   cleaned: CleanedEntry[];
   /** Folders of removed worktrees still being deleted in the background. */
   trash: string[];
-  /** wtId -> last review. */
-  coderabbit: Record<string, CodeRabbitReview>;
+  /** wtId -> each reviewer's last review. */
+  codeReviews: Record<string, Partial<Record<Reviewer, CodeReview>>>;
 }

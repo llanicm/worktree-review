@@ -48,7 +48,10 @@ const branches = () => execFileSync('git', ['branch', '--format=%(refname:short)
 before(async () => {
   const r = spawnSync(process.execPath, [path.join(ROOT, 'extras', 'demo', 'demo.mjs'), DEMO], { env: { ...process.env, WTR_PORT: String(PORT) }, encoding: 'utf8' });
   assert.equal(r.status, 0, r.stderr);
-  await until(async () => (await state()).worktrees.find((w: Json) => w.branch === 'feat/checkout-discounts')?.coderabbit?.status === 'done', 'the demo CodeRabbit review');
+  await until(async () => {
+    const reviews = (await state()).worktrees.find((w: Json) => w.branch === 'feat/checkout-discounts')?.codeReviews;
+    return reviews?.coderabbit?.status === 'done' && reviews?.claude?.status === 'done';
+  }, 'the demo CodeRabbit and Claude reviews');
 });
 
 after(async () => {
@@ -74,7 +77,9 @@ test('state lists the demo worktrees, sessions and PRs', async () => {
   assert.equal(by['feat/checkout-discounts'].dirty, 1);
   assert.deepEqual(by['feat/checkout-discounts'].comments.draft, 1);
   assert.deepEqual(by['feat/checkout-discounts'].comments.open, 1);
-  assert.equal(by['feat/checkout-discounts'].coderabbit.open, 2);
+  assert.equal(by['feat/checkout-discounts'].codeReviews.coderabbit.open, 2);
+  assert.equal(by['feat/checkout-discounts'].codeReviews.claude.open, 1);
+  assert.equal(st.claudeReady, true);
   assert.equal(by['fix/tax-rounding'].pr.state, 'OPEN');
   assert.equal(by['chore/upgrade-node'].pr.state, 'MERGED');
   assert.equal(by['refactor/api-client'].dirtyKind, 'lockfile-only');
@@ -206,11 +211,12 @@ test('a submitted review reaches the session through the hook', async () => {
 
 test('CodeRabbit findings can be sent, dismissed and restored', async () => {
   const wt = await wtBy('feat/checkout-discounts');
-  const { review } = await get(`/api/worktrees/${wt.id}/coderabbit`);
+  const review = (await get(`/api/worktrees/${wt.id}/code-reviews`)).reviews.coderabbit;
   assert.equal(review.status, 'done');
   assert.equal(review.findings.length, 2);
   const [major, minor] = review.findings;
   assert.equal(major.severity, 'major');
+  assert.equal(major.source, 'coderabbit');
   assert.ok(major.snippet.includes("d.kind === 'percent'"));
   await post(`/api/findings/${minor.id}/dismiss`);
   await post(`/api/findings/${minor.id}/restore`);
@@ -218,7 +224,44 @@ test('CodeRabbit findings can be sent, dismissed and restored', async () => {
   assert.ok(sent);
   const comments = (await get(`/api/worktrees/${wt.id}/comments`)).comments;
   assert.ok(comments.some((c: Json) => c.status === 'draft' && /CodeRabbit \(major\)/.test(c.body)));
-  assert.equal((await api('POST', `/api/worktrees/${wt.id}/coderabbit/cancel`)).status, 409);
+  assert.equal((await api('POST', `/api/worktrees/${wt.id}/code-review/coderabbit/cancel`)).status, 409);
+});
+
+test('Claude reviews: effort, findings, cancelling, and the reviewer is not a session', async () => {
+  const wt = await wtBy('feat/checkout-discounts');
+  const { reviews } = await get(`/api/worktrees/${wt.id}/code-reviews`);
+  assert.equal(reviews.coderabbit.findings.length, 2, "a Claude review leaves CodeRabbit's findings alone");
+  const r = reviews.claude;
+  assert.deepEqual([r.reviewer, r.status, r.effort, r.costUsd, r.findings.length], ['claude', 'done', 'medium', 0.18, 1]);
+  const [f] = r.findings;
+  assert.deepEqual([f.source, f.file, f.severity], ['claude', 'src/checkout.ts', 'major'], 'an absolute path comes back relative');
+  assert.ok(f.snippet.includes('taxFor'));
+  assert.match(f.suggestions, /Math\.max\(0, sub - discount\)/);
+  await post(`/api/findings/${f.id}/send`);
+  assert.ok((await get(`/api/worktrees/${wt.id}/comments`)).comments.some((c: Json) => c.status === 'draft' && /Claude \(major\)/.test(c.body)));
+
+  assert.equal((await api('POST', `/api/worktrees/${wt.id}/code-review`, { reviewer: 'someone' })).status, 400);
+  assert.equal((await api('POST', `/api/worktrees/${wt.id}/code-review`, { reviewer: 'claude', effort: 'enormous' })).status, 400);
+
+  // Started with no effort, it uses the default from Settings. While it runs, the reviewer's own Claude Code
+  // process is registered as a live session in the worktree, and must not be linked to it.
+  const other = await wtBy('fix/tax-rounding');
+  const started = await post(`/api/worktrees/${other.id}/code-review`, { reviewer: 'claude' });
+  assert.deepEqual([started.status, started.effort], ['running', 'low']);
+  assert.equal((await api('POST', `/api/worktrees/${other.id}/code-review`, { reviewer: 'claude' })).status, 409);
+  const sessionsDir = path.join(DEMO, 'home', '.claude', 'sessions');
+  const reviewer = await until(async () => fs.readdirSync(sessionsDir).find((n) => !/^[0-9a-f-]{36}\.json$/.test(n)), "the reviewer's session file");
+  await post('/api/hook', { session_id: 'someone-else', cwd: other.path });
+  const st = await state();
+  assert.equal(st.sessions.length, 3, `${reviewer} is not counted as a session`);
+  assert.deepEqual(st.worktrees.find((w: Json) => w.id === other.id).sessions, []);
+  await until(async () => (await wtBy('fix/tax-rounding')).codeReviews.claude.status === 'done', 'the second Claude review');
+  assert.equal((await get(`/api/worktrees/${other.id}/code-reviews`)).reviews.claude.findings.length, 0);
+
+  await post(`/api/worktrees/${other.id}/code-review`, { reviewer: 'claude', effort: 'max' });
+  await post(`/api/worktrees/${other.id}/code-review/claude/cancel`);
+  const cancelled = (await get(`/api/worktrees/${other.id}/code-reviews`)).reviews.claude;
+  assert.deepEqual([cancelled.status, cancelled.effort], ['cancelled', 'max']);
 });
 
 test('settings: integrations, config, folders, onboarding', async () => {
@@ -227,6 +270,11 @@ test('settings: integrations, config, folders, onboarding', async () => {
   assert.equal(integ.gh.account, 'sam-rivera');
   assert.equal(integ.coderabbit.authed, true);
   assert.equal(integ.coderabbit.org, 'acme');
+  assert.equal(integ.claude.cliVersion, '2.1.0');
+  await post('/api/config', { reviewEffort: 'high' });
+  assert.equal((await state()).config.reviewEffort, 'high');
+  assert.equal((await api('POST', '/api/config', { reviewEffort: 'extreme' })).status, 400);
+  await post('/api/config', { reviewEffort: 'low' });
   await post('/api/config', { recentDays: 5 });
   assert.equal((await state()).config.recentDays, 5);
   assert.equal((await api('POST', '/api/config', { recentDays: 'lots' })).status, 400);
@@ -298,7 +346,15 @@ test('the page renders a worktree without errors', { skip: !fs.existsSync(proces
       throw new Error(`${e.message}\nPage shows: ${await page.eval("document.querySelector('#main')?.innerText.slice(0, 300)")}`);
     });
     assert.ok(rows > 20, `rendered ${rows} diff rows`);
-    assert.ok(await page.waitFor("document.querySelectorAll('.cr-finding').length"), 'CodeRabbit findings shown inline');
+    assert.ok(await page.waitFor("document.querySelectorAll('.cr-finding.coderabbit').length"), 'CodeRabbit findings shown inline');
+    assert.ok(await page.waitFor("document.querySelectorAll('.cr-panels > .cr-panel').length === 2"), 'a panel for each reviewer');
+    // Both reviewers are ready, so Run code review asks which one; picking Claude offers the effort, preset from Settings.
+    await page.eval("document.querySelector('[data-act=review-menu]').click()");
+    await page.waitFor("document.querySelector('.review-menu input[value=claude]')");
+    await page.eval("(() => { const r = document.querySelector('.review-menu input[value=claude]'); r.checked = true; r.dispatchEvent(new Event('change', { bubbles: true })); })()");
+    assert.equal(await page.waitFor<string>("document.querySelector('.review-menu select[data-review=effort]')?.value"), 'low');
+    await page.eval("document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))");
+    assert.ok(await page.waitFor("!document.querySelector('.review-menu')"), 'Escape closes the menu');
     // highlight.js comes from cdnjs, pinned by an integrity hash; a mismatch would leave the code unhighlighted.
     assert.ok(await page.waitFor("document.querySelector('td.code [class^=hljs-]')"), 'syntax highlighting loaded');
     assert.ok(await page.waitFor("document.querySelectorAll('.cbar, [class*=commit-c]').length || document.querySelectorAll('tr.line td').length"));

@@ -1,7 +1,7 @@
 // ---------- actions (data-act event delegation) ----------
-import type { CodeRabbitReview, FileBlame, Integrations, RepairResult } from '../shared/api.ts';
+import type { CodeReview, FileBlame, Integrations, RepairResult, Reviewer, StartCodeReview } from '../shared/api.ts';
 import { fillFile } from './lazy.ts';
-import { indexFindings, loadCodeRabbit } from './coderabbit.ts';
+import { indexFindings, loadCodeReviews, NAMES, reviewPick } from './code-review.ts';
 import { collapseAll, expandAll, redrawFile, toggleBody, toggleCommit, toggleFile } from './collapse.ts';
 import { cleanPicked, cleanupGroups } from './cleanup.ts';
 import { keyOf, parseKey, sameCommit } from './diff.ts';
@@ -238,24 +238,36 @@ export const actions: Record<string, Action> = {
   'auto-cleanup': async (el) => { await api('POST', '/api/config', { autoCleanup: isChecked(el) }); },
   'toggle-older': () => { S.showOlder = !S.showOlder; renderSidebar(); },
   'toggle-cleaned': () => { S.showCleaned = !S.showCleaned; renderSidebar(); },
-  'cr-run': async () => {
-    const r = await api<CodeRabbitReview>('POST', `/api/worktrees/${S.selId}/coderabbit`);
-    view().cr = r;
-    indexFindings();
-    toast('CodeRabbit started. This usually takes a few minutes.');
+  'review-menu': () => {
+    S.reviewMenu = S.reviewMenu === S.selId ? null : S.selId;
+    // Each time it opens, the effort starts from the default in Settings; the reviewer picked last time stays.
+    if (S.reviewMenu && S.reviewPick) S.reviewPick = { ...S.reviewPick, effort: null };
     renderMain();
   },
-  'cr-cancel': async () => {
-    if (!confirm('Cancel this CodeRabbit review? Its progress is thrown away.')) return;
-    await api('POST', `/api/worktrees/${S.selId}/coderabbit/cancel`);
+  'review-start': async () => {
+    const wt = curWt();
+    if (!wt) return;
+    const { reviewer, effort } = reviewPick(wt);
+    const body: StartCodeReview = reviewer === 'claude' ? { reviewer, effort } : { reviewer };
+    const r = await api<CodeReview>('POST', `/api/worktrees/${wt.id}/code-review`, body);
+    S.reviewMenu = null;
+    (view().codeReviews ??= {})[reviewer] = r;
+    indexFindings();
+    toast(reviewer === 'coderabbit' ? 'CodeRabbit started. This usually takes a few minutes.' : `Claude started a ${effort}-effort review.`);
+    renderMain();
   },
-  'cr-send': async (el) => { await api('POST', `/api/findings/${attr(el, 'id')}/send`); await loadCodeRabbit(); await reloadComments(); },
-  'cr-dismiss': async (el) => { await api('POST', `/api/findings/${attr(el, 'id')}/dismiss`); await loadCodeRabbit(); renderMain(); },
-  'cr-restore': async (el) => { await api('POST', `/api/findings/${attr(el, 'id')}/restore`); await loadCodeRabbit(); renderMain(); },
-  'cr-send-all': async () => {
-    const { sent } = await api<{ sent: number }>('POST', `/api/worktrees/${S.selId}/coderabbit/send-all`);
+  'review-cancel': async (el) => {
+    const reviewer = attr(el, 'reviewer') as Reviewer;
+    if (!confirm(`Cancel this ${NAMES[reviewer]} review? Its progress is thrown away.`)) return;
+    await api('POST', `/api/worktrees/${S.selId}/code-review/${reviewer}/cancel`);
+  },
+  'cr-send': async (el) => { await api('POST', `/api/findings/${attr(el, 'id')}/send`); await loadCodeReviews(); await reloadComments(); },
+  'cr-dismiss': async (el) => { await api('POST', `/api/findings/${attr(el, 'id')}/dismiss`); await loadCodeReviews(); renderMain(); },
+  'cr-restore': async (el) => { await api('POST', `/api/findings/${attr(el, 'id')}/restore`); await loadCodeReviews(); renderMain(); },
+  'cr-send-all': async (el) => {
+    const { sent } = await api<{ sent: number }>('POST', `/api/worktrees/${S.selId}/code-review/${attr(el, 'reviewer')}/send-all`);
     toast(`Added ${sent} finding${sent === 1 ? '' : 's'} to your review as drafts`);
-    await loadCodeRabbit();
+    await loadCodeReviews();
     await reloadComments();
   },
   'cr-jump': (el, e) => {

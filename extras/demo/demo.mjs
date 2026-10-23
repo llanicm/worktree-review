@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Builds a self-contained demo of Worktree Review and starts a server on it, for screenshots
 // and trying it out. Nothing outside the demo folder is read or changed: it runs with its own
-// HOME (so its own ~/.claude), a made-up repo, and stand-ins for `gh` and `coderabbit`.
+// HOME (so its own ~/.claude), a made-up repo, and stand-ins for `gh`, `coderabbit` and `claude`.
 //
 //   node extras/demo/demo.mjs [folder]     (default: ./.demo; port: WTR_PORT or 4848)
 //
@@ -290,7 +290,7 @@ const age = (dir, ms) => {
 age(disc, 20 * 60_000);
 age(apiWt, 10 * DAY);
 
-// ---------- stand-ins for gh and coderabbit ----------
+// ---------- stand-ins for gh, coderabbit and claude ----------
 
 const lineOf = (dir, file, text) => fs.readFileSync(path.join(dir, file), 'utf8').split('\n').findIndex((l) => l.includes(text)) + 1;
 const L = {
@@ -354,6 +354,32 @@ else if (args[0] === 'auth' && args[1] === 'status') {
   out({ type: 'complete', reviewedFiles: ['src/checkout.ts', 'src/discounts.ts', 'test/discounts.test.ts'], message: 'Review complete' });
 } else process.exit(1);
 `);
+// Claude Code's headless /code-review. Like the real CLI, it registers as a live session while it runs.
+shim('claude', `
+const fs = require('fs'), path = require('path');
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+if (args[0] === '--version') { out('2.1.0 (Claude Code)'); return; }
+const flag = (f) => args[args.indexOf(f) + 1];
+const fail = (msg) => { console.error(msg); process.exit(2); };
+if (!args.includes('-p') || !args.includes('--safe-mode') || !args.includes('--json-schema') || flag('--output-format') !== 'stream-json') fail('unexpected arguments: ' + args.join(' '));
+if (process.env.CLAUDECODE || process.env.CLAUDE_CODE_SESSION_ID) fail('started with the environment of another session');
+if (!['low', 'medium', 'high', 'xhigh', 'max'].includes(flag('--effort'))) fail('unknown effort: ' + flag('--effort'));
+const file = path.join(process.env.HOME, '.claude', 'sessions', process.pid + '.json');
+fs.writeFileSync(file, JSON.stringify({ sessionId: 'reviewer-' + process.pid, pid: process.pid, cwd: process.cwd(), status: 'busy', entrypoint: 'sdk-cli' }));
+process.on('exit', () => { try { fs.unlinkSync(file); } catch {} });
+process.on('SIGTERM', () => process.exit(143));
+out({ type: 'system', subtype: 'init' });
+out({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Skill', input: { skill: 'code-review' } }] } });
+await sleep(800);
+out({ type: 'assistant', message: { content: [{ type: 'tool_use', name: 'Bash', input: { command: 'git diff main...HEAD' } }] } });
+await sleep(400);
+const findings = path.basename(process.cwd()) === 'checkout-discounts' ? [
+  { file: path.join(process.cwd(), 'src/checkout.ts'), startLine: ${L.tax}, severity: 'major', title: 'Tax is taken after a discount that can exceed the subtotal',
+    comment: 'With a percent code over 100, sub - discount is negative, so taxFor gets a negative amount and the order total goes below zero.',
+    suggestion: 'const tax = taxFor(Math.max(0, sub - discount), region);' },
+] : [];
+out({ type: 'result', subtype: 'success', is_error: false, total_cost_usd: 0.18, result: '', structured_output: { findings } });
+`);
 
 // ---------- Claude Code sessions ----------
 
@@ -380,7 +406,7 @@ const DATA = path.join(CLAUDE, 'worktree-review');
 fs.mkdirSync(DATA, { recursive: true });
 fs.writeFileSync(path.join(DATA, 'config.json'), JSON.stringify({ roots: [], extraRepos: [], autoCleanup: true, recentDays: 3, prPollMinutes: 5, editor: 'vscode' }, null, 2));
 fs.writeFileSync(path.join(DATA, 'state.json'), JSON.stringify({
-  installedAt: now - 5 * DAY, onboardedAt: now - 5 * DAY, worktrees: {}, comments: [], reviews: [], coderabbit: {}, trash: [],
+  installedAt: now - 5 * DAY, onboardedAt: now - 5 * DAY, worktrees: {}, comments: [], reviews: [], codeReviews: {}, trash: [],
   cleaned: [{
     path: path.join(WTS, 'onboarding-docs'), branch: 'docs/onboarding', sha: depsHead, repoRoot: REPO, how: 'auto',
     branchDeleted: true, branchKept: null, at: now - 2 * DAY, reason: 'merged',
@@ -390,7 +416,8 @@ fs.writeFileSync(path.join(DATA, 'state.json'), JSON.stringify({
 
 // ---------- start the server and add review activity ----------
 
-const env = { ...process.env, HOME, PATH: `${BIN}:${process.env.PATH}`, WTR_PORT: String(PORT), WTR_DATA_DIR: DATA };
+// CLAUDECODE and CLAUDE_CODE_SESSION_ID are set as when a session's hook starts the server; Claude reviews must run without them.
+const env = { ...process.env, HOME, PATH: `${BIN}:${process.env.PATH}`, WTR_PORT: String(PORT), WTR_DATA_DIR: DATA, CLAUDECODE: '1', CLAUDE_CODE_SESSION_ID: 'demo-parent-session' };
 // WTR_DIST: run a build other than ./dist (the tests use this).
 const SERVER = path.join(process.env.WTR_DIST ? path.resolve(process.env.WTR_DIST) : path.join(ROOT, 'dist'), 'server.mjs');
 const server = spawn(process.execPath, [SERVER], { env, detached: true, stdio: ['ignore', fs.openSync(path.join(DEMO, 'server.log'), 'a'), fs.openSync(path.join(DEMO, 'server.log'), 'a')] });
@@ -411,7 +438,8 @@ await api('POST', `/api/comments/${c1.id}/reply`, { author: 'claude', body: "Goo
 const c2 = await api('POST', '/api/comments', { wtId: wt.id, file: 'src/checkout.ts', side: 'new', line: L.tax, lineText: '  const tax = taxFor(sub - discount, region);', body: 'Tax after discount is right for the UK, but check with finance for the US states we ship to.' });
 await api('POST', `/api/comments/${c2.id}/resolve`, { note: 'Checked the tax table: all of our US regions tax the discounted price, so this is correct everywhere. Added a comment saying so.' });
 await api('POST', '/api/comments', { wtId: wt.id, file: 'test/discounts.test.ts', side: 'new', line: L.test, lineText: "test('a fixed discount never exceeds the amount', () => {", body: 'Add the same test for a percentage code over 100%.' });
-await api('POST', `/api/worktrees/${wt.id}/coderabbit`);
+await api('POST', `/api/worktrees/${wt.id}/code-review`, { reviewer: 'coderabbit' });
+await api('POST', `/api/worktrees/${wt.id}/code-review`, { reviewer: 'claude', effort: 'medium' });
 await sleep(2500);
 
 console.log(`Demo running at http://localhost:${PORT}  (folder: ${DEMO})`);

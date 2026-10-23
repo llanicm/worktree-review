@@ -25,7 +25,7 @@ npm run demo        # try it on a made-up repo at http://localhost:4848
 npm run check       # what CI runs: types, then a fresh build and the smoke test
 ```
 
-The demo runs on its own made-up repo, home folder and stand-ins for `gh` and `coderabbit`, so
+The demo runs on its own made-up repo, home folder and stand-ins for `gh`, `coderabbit` and `claude`, so
 it never touches your own repos or accounts.
 
 ### Things to know
@@ -34,7 +34,7 @@ it never touches your own repos or accounts.
   (they have no build step), so it's committed, but CI rebuilds and commits it after every merge.
   The scripts above build into `.build/` instead, and a PR that changes `dist/` fails its check.
 - **Strict TypeScript, no runtime dependencies.** The server uses Node built-ins and shells out to
-  `git`, `gh` and `coderabbit`; the page is plain DOM code. Request and response shapes live in
+  `git`, `gh`, `coderabbit` and `claude`; the page is plain DOM code. Request and response shapes live in
   `src/shared/api.ts`, used by both sides.
 - **Keep it safe.** Anything that removes a worktree, deletes a branch or changes the user's repos
   needs a clear reason it can't lose work, and a test.

@@ -1,13 +1,13 @@
 import type { ServerResponse } from 'node:http';
-import type { PublicState, Worktree } from '../shared/api.ts';
+import type { CodeReviewSummary, PublicState, Reviewer, Worktree } from '../shared/api.ts';
 import { cleanupStatus } from './cleanup-status.ts';
 import { config } from './config.ts';
-import { coderabbitReady, crLogin } from './integrations.ts';
+import { claudeReady, coderabbitReady, crLogin } from './integrations.ts';
 import { jobs } from './jobs.ts';
 import { HOME, PORT, VERSION } from './paths.ts';
 import { prError } from './prs.ts';
 import { repos, sessions, state, takeChanged, wts } from './state.ts';
-import type { WorktreeRecord, WorktreeState } from './types.ts';
+import type { State, WorktreeRecord, WorktreeState } from './types.ts';
 import { sha1 } from './util.ts';
 
 // ---------- public state & SSE ----------
@@ -15,7 +15,14 @@ import { sha1 } from './util.ts';
 function publicWorktree(wt: WorktreeRecord): Worktree {
   const s: Partial<WorktreeState> = state.worktrees[wt.id] ?? {};
   const mine = state.comments.filter((c) => c.wtId === wt.id);
-  const r = state.coderabbit[wt.id];
+  const codeReviews: Partial<Record<Reviewer, CodeReviewSummary>> = {};
+  for (const [k, r] of Object.entries(state.codeReviews[wt.id] ?? {}) as [Reviewer, NonNullable<State['codeReviews'][string][Reviewer]>][]) {
+    codeReviews[k] = {
+      status: r.status, startedAt: r.startedAt, finishedAt: r.finishedAt, heartbeatAt: r.heartbeatAt,
+      open: r.findings.filter((f) => f.status === 'open').length, total: r.findings.length,
+      sig: sha1(r.status + (r.message || '') + r.findings.map((f) => f.id + f.status).join()).slice(0, 10),
+    };
+  }
   return {
     id: wt.id, path: wt.path, repoName: wt.repoName, branch: wt.branch, head: wt.head,
     isMain: wt.isMain, locked: wt.locked, detached: wt.detached,
@@ -27,11 +34,7 @@ function publicWorktree(wt: WorktreeRecord): Worktree {
     error: wt.error || null,
     busy: wt.busy || null,
     dirtyKind: wt.dirtyKind || null,
-    coderabbit: r ? {
-      status: r.status, startedAt: r.startedAt, finishedAt: r.finishedAt, heartbeatAt: r.heartbeatAt,
-      open: r.findings.filter((f) => f.status === 'open').length, total: r.findings.length,
-      sig: sha1(r.status + r.findings.map((f) => f.id + f.status).join()).slice(0, 10),
-    } : null,
+    codeReviews,
     review: {
       reviewedAt: s.reviewedAt || null,
       needsReview: !!wt.fingerprint && (wt.stats?.files || 0) > 0 && s.reviewedFp !== wt.fingerprint,
@@ -54,13 +57,14 @@ export function publicState(): PublicState {
     prError,
     config: {
       autoCleanup: config.autoCleanup, recentDays: config.recentDays, editor: config.editor,
-      prPollMinutes: config.prPollMinutes, roots: config.roots, extraRepos: config.extraRepos,
+      prPollMinutes: config.prPollMinutes, roots: config.roots, extraRepos: config.extraRepos, reviewEffort: config.reviewEffort,
     },
     onboardedAt: state.onboardedAt || null,
     repos: [...repos.values()].map((r) => ({ name: r.name, root: r.root, github: r.gh ? `${r.gh.owner}/${r.gh.name}` : null })),
     coderabbitLogin: crLogin,
     jobs: jobs.filter((j) => !j.dismissed).slice(0, 5),
     coderabbitReady: coderabbitReady(),
+    claudeReady: claudeReady(),
     installedAt: state.installedAt,
     sessions: [...sessions.values()].map((s) => ({ sessionId: s.sessionId, name: s.name, status: s.status, cwd: s.cwd })),
     cleaned: state.cleaned.slice(0, 30),
