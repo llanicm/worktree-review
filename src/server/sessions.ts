@@ -117,7 +117,8 @@ function refreshAgents(s: SessionRecord, transcript: string, paths: string[], ow
       a.scannedAt = Date.now();
       // Without a worktree of its own, a subagent starts in its session's directory; only count
       // the worktrees it reaches into from there.
-      a.worktreePaths = linkSession(readTail(tp, 3 * 1024 * 1024), paths).filter((p) => p !== ownPath);
+      // It can be removed between the stat and the read; keep what it had and look again next time.
+      try { a.worktreePaths = linkSession(readTail(tp, 3 * 1024 * 1024), paths).filter((p) => p !== ownPath); } catch { a.scannedSize = -1; }
     }
     result.push(a);
   }
