@@ -40,6 +40,10 @@ export function headerHtml(wt: Worktree) {
           <ul>${cs.reasons.map((r) => `<li>${esc(r)}</li>`).join('')}</ul>${notes}${files}${commits}
           ${cs.forceable ? `<div class="actions" style="margin-top:8px">${busy || '<button class="btn danger" data-act="remove-anyway">Remove anyway…</button><span class="muted small">The branch is kept either way.</span>'}</div>` : ''}</div>`;
   }
+  if (wt.isMain && wt.pr?.state === 'MERGED') {
+    cleanup = `<div class="callout merged small"><strong>PR merged.</strong> This is the repository's own folder, so it's never removed.
+      Switch it back with <code>git switch ${esc(wt.pr.baseRefName)} &amp;&amp; git pull</code>.</div>`;
+  }
   return `<div class="title-row"><h1>${esc(name)}${pr}</h1>
       <div class="actions">${prChip(wt.pr)}${wt.sessions.map(sessionChip).join('')}${wt.agents.map(agentChip).join('')}</div></div>
     ${wt.pr ? `<div class="meta">${esc(wt.pr.title)}</div>` : ''}

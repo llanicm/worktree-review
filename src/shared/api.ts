@@ -38,6 +38,8 @@ export interface PullRequest {
   url: string;
   title: string;
   mergedAt: string | null;
+  /** The branch it merges into. */
+  baseRefName: string;
 }
 
 export type SessionStatus = 'busy' | 'idle' | 'shell' | 'unknown' | (string & {});

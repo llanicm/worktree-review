@@ -1,10 +1,10 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { CLAUDE_DIR } from './paths.ts';
+import { CLAUDE_DIR, HOME } from './paths.ts';
 import { pidAlive } from './exec.ts';
 import { changed, reviewerPids, sessions, wts } from './state.ts';
 import type { AgentRecord, SessionRecord } from './types.ts';
-import { isRecord, loadJson } from './util.ts';
+import { asStr, isRecord, loadJson, rec } from './util.ts';
 import { discoverWorktrees } from './worktrees.ts';
 
 const transcriptCache = new Map<string, string>(); // sessionId -> path
@@ -33,28 +33,45 @@ function readTail(p: string, bytes: number): string {
   } finally { fs.closeSync(fd); }
 }
 
-// Which worktrees has this session been working in? A path counts when the
-// session's shell cwd was inside it, or it's mentioned repeatedly (a single
-// mention, e.g. from `git worktree list`, doesn't count).
+// Which worktrees has this session been working in? One counts when the session's directory was inside it,
+// it edited a file in it, or it ran a shell command that went into it (`cd`) or changed it with `git -C`.
+// Only mentioning a path, as reading, searching or listing worktrees does, isn't working there.
+const EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit']);
+const GIT_CHANGES = /^(add|am|apply|checkout|cherry-pick|commit|merge|mv|pull|push|rebase|reset|restore|revert|rm|stash|switch)$/;
+const ARG = String.raw`("[^"]+"|'[^']+'|[^\s;&|)]+)`;
+const CD = new RegExp(String.raw`(?:^|[;&|(]\s*)cd\s+${ARG}`, 'g');
+const GIT_C = new RegExp(String.raw`\bgit\s+-C\s+${ARG}\s+([a-z-]+)`, 'g');
+
+const unquote = (a: string): string => a.replace(/^(["'])(.*)\1$/, '$2').replace(/^~(?=\/|$)/, HOME);
+
+/** The directories a shell command works in, as far as can be told from its text. */
+function shellTargets(cmd: string): string[] {
+  const dirs = [...cmd.matchAll(CD)].map((m) => unquote(m[1] ?? ''));
+  for (const m of cmd.matchAll(GIT_C)) if (GIT_CHANGES.test(m[2] ?? '')) dirs.push(unquote(m[1] ?? ''));
+  return dirs.filter((d) => d.startsWith('/'));
+}
+
+const worktreeOf = (p: string | undefined, paths: string[]): string | undefined =>
+  p ? paths.filter((w) => p === w || p.startsWith(w + '/')).sort((a, b) => b.length - a.length)[0] : undefined;
+
 function linkSession(text: string, paths: string[]): string[] {
-  const result: { path: string; last: number }[] = [];
-  for (const p of paths) {
-    const nested = paths.filter((q) => q.length > p.length && q.startsWith(p + '/'));
-    let count = 0, last = -1, cwdHit = false;
-    let i = text.indexOf(p);
-    while (i !== -1) {
-      const ch = text[i + p.length];
-      const boundary = ch === undefined || /[/"'\s\\`:),]/.test(ch);
-      if (boundary && !nested.some((q) => text.startsWith(q, i))) {
-        count++;
-        last = i;
-        if (text.startsWith('"cwd":"', i - 7)) cwdHit = true;
-      }
-      i = text.indexOf(p, i + p.length);
+  const last = new Map<string, number>(); // worktree -> line it was last worked in
+  text.split('\n').forEach((line, i) => {
+    let entry: unknown;
+    try { entry = JSON.parse(line); } catch { return; } // the first line is usually cut off
+    const hit = (p: string | undefined): void => { const w = worktreeOf(p, paths); if (w) last.set(w, i); };
+    const e = rec(entry);
+    hit(asStr(e.cwd));
+    const content = rec(e.message).content;
+    if (!Array.isArray(content)) return;
+    for (const c of content.map(rec)) {
+      if (c.type !== 'tool_use') continue;
+      const input = rec(c.input);
+      if (typeof c.name === 'string' && EDIT_TOOLS.has(c.name)) hit(asStr(input.file_path) ?? asStr(input.notebook_path));
+      else if (c.name === 'Bash') for (const d of shellTargets(asStr(input.command) ?? '')) hit(d);
     }
-    if (cwdHit || count >= 6) result.push({ path: p, last });
-  }
-  return result.sort((a, b) => b.last - a.last).map((r) => r.path);
+  });
+  return [...last].sort((a, b) => b[1] - a[1]).map(([p]) => p);
 }
 
 interface SessionInfo { sessionId: string; pid: number; name?: string; status?: string; cwd?: string }
@@ -125,8 +142,6 @@ function refreshAgents(s: SessionRecord, transcript: string, paths: string[], ow
   return result;
 }
 
-const ownWorktree = (cwd: string | undefined, paths: string[]): string | undefined =>
-  cwd ? paths.filter((p) => cwd === p || cwd.startsWith(p + '/')).sort((a, b) => b.length - a.length)[0] : undefined;
 
 export function refreshSessions(): void {
   const dir = path.join(CLAUDE_DIR, 'sessions');
@@ -141,7 +156,7 @@ export function refreshSessions(): void {
     let s = sessions.get(info.sessionId);
     if (!s) { s = { sessionId: info.sessionId, worktreePaths: [], scannedSize: -1, scannedAt: 0, pid: info.pid, name: '', status: 'unknown', agents: [] }; sessions.set(info.sessionId, s); }
     Object.assign(s, { pid: info.pid, name: info.name || info.sessionId.slice(0, 8), status: info.status || 'unknown', cwd: info.cwd });
-    const own = ownWorktree(s.cwd, paths);
+    const own = worktreeOf(s.cwd, paths);
     const tp = findTranscript(s.sessionId);
     if (tp) {
       try {

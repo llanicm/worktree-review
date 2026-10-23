@@ -398,6 +398,14 @@ const session = (id, name, status, cwd) => {
 session('11111111-aaaa-4aaa-8aaa-111111111111', 'shop-checkout', 'idle', disc);
 session('22222222-bbbb-4bbb-8bbb-222222222222', 'shop-search', 'busy', search);
 session('33333333-cccc-4ccc-8ccc-333333333333', 'shop-main', 'idle', REPO);
+// shop-main looked around api-client (which doesn't make it work there) and went into search-filters (which does).
+const turn = (content) => JSON.stringify({ type: 'assistant', cwd: REPO, message: { role: 'assistant', content } });
+fs.appendFileSync(path.join(CLAUDE, 'projects', 'shop', '33333333-cccc-4ccc-8ccc-333333333333.jsonl'), [
+  turn([{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: `git -C ${apiWt} log --oneline -3 && ls ${apiWt}/src` } }]),
+  turn([{ type: 'tool_use', id: 't2', name: 'Read', input: { file_path: `${apiWt}/src/api.ts` } }]),
+  turn([{ type: 'text', text: Array(8).fill(`${apiWt}/src/api.ts`).join(' ') }]),
+  turn([{ type: 'tool_use', id: 't3', name: 'Bash', input: { command: `cd "${search}" && npm test` } }]),
+].join('\n') + '\n');
 // shop-main has a subagent fixing tax rounding in its own worktree, and one that has finished in the spike.
 const subagent = (sessionId, agentId, meta, cwd) => {
   const dir = path.join(CLAUDE, 'projects', 'shop', sessionId, 'subagents');
