@@ -341,11 +341,11 @@ function panelHtml(wt, r) {
   const name = NAMES[r.reviewer];
   const findings = [...r.findings].sort((a, b) => SEV_ORDER.indexOf(a.severity) - SEV_ORDER.indexOf(b.severity));
   const open = findings.filter((f) => f.status === "open");
-  const stale = r.status !== "running" && r.fingerprint && r.fingerprint !== wt.fingerprint;
+  const stale = wt.codeReviews[r.reviewer]?.stale;
   let head, body = "";
   if (r.status === "running") {
     head = `${name} is reviewing against <code>${esc(r.baseRef)}</code>`;
-    const note = r.reviewer === "coderabbit" ? "Reviews usually take 2–6 minutes and can take 15 or more." : r.message ? `${esc(r.message)}…` : "Starting…";
+    const note = `${r.message ? `${esc(r.message)}… ` : ""}${r.reviewer === "coderabbit" ? '<span class="muted">Reviews usually take 2–6 minutes and can take 15 or more.</span>' : ""}`;
     body = `<div class="cr-working">${scanHtml(r)}<div><p>${note}</p><p class="muted">${findings.length ? `${findings.length} finding${findings.length === 1 ? "" : "s"} so far. ` : ""}They show in the code as they arrive. You can leave this page.</p></div></div>`;
   } else if (r.status === "done") {
     head = `${name} · ${findings.length ? `${open.length} open of ${findings.length} finding${findings.length === 1 ? "" : "s"}` : "no findings"}`;
@@ -2006,9 +2006,41 @@ Their folders are deleted. ${merged ? `${merged} merged branch${merged === 1 ? "
     if (!wt) return;
     const { reviewer, effort } = reviewPick(wt);
     const body = reviewer === "claude" ? { reviewer, effort } : { reviewer };
-    const r = await api("POST", `/api/worktrees/${wt.id}/code-review`, body);
+    const reviews = view().codeReviews ??= {};
+    const before = { review: reviews[reviewer], summary: wt.codeReviews[reviewer] };
+    const now = Date.now();
+    reviews[reviewer] = {
+      reviewer,
+      status: "running",
+      startedAt: now,
+      finishedAt: null,
+      baseRef: wt.baseRef,
+      fingerprint: wt.fingerprint,
+      findings: [],
+      reviewedFiles: [],
+      error: null,
+      heartbeatAt: now,
+      usage: null,
+      effort: reviewer === "claude" ? effort : void 0,
+      message: "Starting"
+    };
+    wt.codeReviews[reviewer] = { status: "running", startedAt: now, finishedAt: null, heartbeatAt: now, open: 0, total: 0, sig: "starting", stale: false };
     S.reviewMenu = null;
-    (view().codeReviews ??= {})[reviewer] = r;
+    indexFindings();
+    renderMain();
+    let r;
+    try {
+      r = await api("POST", `/api/worktrees/${wt.id}/code-review`, body);
+    } catch (e) {
+      if (before.review) reviews[reviewer] = before.review;
+      else delete reviews[reviewer];
+      if (before.summary) wt.codeReviews[reviewer] = before.summary;
+      else delete wt.codeReviews[reviewer];
+      indexFindings();
+      renderMain();
+      throw e;
+    }
+    if (S.view?.wtId === wt.id) (S.view.codeReviews ??= {})[reviewer] = r;
     indexFindings();
     toast(reviewer === "coderabbit" ? "CodeRabbit started. This usually takes a few minutes." : `Claude started a ${effort}-effort review.`);
     renderMain();

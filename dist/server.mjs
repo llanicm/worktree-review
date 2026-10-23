@@ -249,6 +249,7 @@ function takeChanged() {
 
 // src/server/worktrees.ts
 import fs6 from "node:fs";
+import os2 from "node:os";
 import path3 from "node:path";
 
 // src/server/repos.ts
@@ -546,6 +547,7 @@ function refreshWorktree(wt, { force = false } = {}) {
     const fp = sha1([head, base.ref, baseSha, status, ...stamps].join("|"));
     if (fp !== wt.fingerprint || force) {
       wt.fingerprint = fp;
+      if (Object.values(state.codeReviews[wt.id] ?? {}).some((r) => r?.contentTree)) wt.contentTree = await contentTree(wt);
       wt.baseRef = base.ref;
       wt.baseSource = base.source;
       try {
@@ -576,6 +578,24 @@ function refreshWorktree(wt, { force = false } = {}) {
   });
   wt.checking = checking;
   return checking;
+}
+async function contentTree(wt) {
+  const tmp = path3.join(os2.tmpdir(), `wtr-index-${process.pid}-${wt.id}`);
+  try {
+    const index = (await git(wt.path, ["rev-parse", "--path-format=absolute", "--git-path", "index"])).trim();
+    try {
+      fs6.copyFileSync(index, tmp);
+    } catch {
+      fs6.rmSync(tmp, { force: true });
+    }
+    const env = { GIT_INDEX_FILE: tmp };
+    await git(wt.path, ["add", "-A"], { env });
+    return (await git(wt.path, ["write-tree"], { env })).trim() || null;
+  } catch {
+    return null;
+  } finally {
+    fs6.rmSync(tmp, { force: true });
+  }
 }
 function isActive(wt) {
   return wt.sessions.length > 0 || wt.agents.length > 0 || Date.now() - wt.lastActivity < 2 * 36e5;
@@ -1272,6 +1292,7 @@ function publicWorktree(wt) {
   const mine = state.comments.filter((c) => c.wtId === wt.id);
   const codeReviews = {};
   for (const [k, r] of Object.entries(state.codeReviews[wt.id] ?? {})) {
+    const stale = r.status !== "running" && !!r.contentTree && !!wt.contentTree && r.contentTree !== wt.contentTree;
     codeReviews[k] = {
       status: r.status,
       startedAt: r.startedAt,
@@ -1279,7 +1300,8 @@ function publicWorktree(wt) {
       heartbeatAt: r.heartbeatAt,
       open: r.findings.filter((f) => f.status === "open").length,
       total: r.findings.length,
-      sig: sha1(r.status + (r.message || "") + r.findings.map((f) => f.id + f.status).join()).slice(0, 10)
+      stale,
+      sig: sha1(r.status + (r.message || "") + stale + r.findings.map((f) => f.id + f.status).join()).slice(0, 10)
     };
   }
   return {
@@ -1398,6 +1420,25 @@ function beginReview(wt, reviewer, extra = {}) {
 }
 function assertIdle(wt, reviewer) {
   if (reviewOf(wt.id, reviewer)?.status === "running") throw httpError(409, `A ${REVIEWER_NAMES[reviewer]} review is already running for this worktree.`);
+}
+function startInBackground(wt, review, setUp, run2) {
+  save();
+  changed();
+  setUp().then(async () => {
+    if (review.status !== "running") return;
+    review.baseRef = wt.baseRef;
+    review.fingerprint = wt.fingerprint;
+    review.contentTree = wt.contentTree = await contentTree(wt);
+    if (review.status === "running") run2();
+  }).catch((e) => {
+    if (review.status !== "running") return;
+    review.status = "failed";
+    review.error = errInfo(e).message || `${REVIEWER_NAMES[review.reviewer]} couldn't start.`;
+    review.finishedAt = Date.now();
+    log(`${REVIEWER_NAMES[review.reviewer]} review couldn't start for ${wt.path}: ${review.error}`);
+    save();
+    changed();
+  });
 }
 function addSnippet(wt, f) {
   try {
@@ -1573,15 +1614,18 @@ function toFinding(wt, v) {
     status: "open"
   };
 }
-async function startClaudeReview(wt, effort = config.reviewEffort) {
+function startClaudeReview(wt, effort = config.reviewEffort) {
   assertIdle(wt, "claude");
   if (!isEffort(effort)) throw httpError(400, `Unknown effort: ${String(effort)}`);
-  const integ = await getIntegrations();
-  if (!integ.claude.cliVersion) throw httpError(409, "The claude CLI was not found. See Settings.");
-  await refreshWorktree(wt);
-  const base = wt.baseRef;
-  if (!base) throw httpError(409, "This worktree has nothing to compare with yet.");
-  const review = beginReview(wt, "claude", { effort, costUsd: null });
+  const review = beginReview(wt, "claude", { effort, costUsd: null, message: "Starting" });
+  startInBackground(wt, review, async () => {
+    if (!claudeReady() && !(await getIntegrations()).claude.cliVersion) throw httpError(409, "The claude CLI was not found. See Settings.");
+    await refreshWorktree(wt);
+    if (!wt.baseRef) throw httpError(409, "This worktree has nothing to compare with yet.");
+  }, () => runClaude(wt, review, effort, wt.baseRef ?? ""));
+  return review;
+}
+function runClaude(wt, review, effort, base) {
   let reported = false;
   runReview(wt, review, claudeBin(), [
     "-p",
@@ -1620,7 +1664,6 @@ async function startClaudeReview(wt, effort = config.reviewEffort) {
       if (!reported) review.error ||= "Claude exited without a result.";
     }
   });
-  return review;
 }
 
 // src/server/coderabbit.ts
@@ -1659,17 +1702,24 @@ function toFinding2(ev) {
     status: "open"
   };
 }
-async function startCodeRabbit(wt) {
+function startCodeRabbit(wt) {
   assertIdle(wt, "coderabbit");
-  const integ = await getIntegrations();
-  if (!integ.coderabbit.installed) throw httpError(409, "The CodeRabbit CLI is not installed. See Settings.");
-  if (!integ.coderabbit.authed) throw httpError(409, "Sign in to CodeRabbit in Settings first.");
-  await refreshWorktree(wt);
-  const usage = await crUsage(wt);
-  if (usage && usage.remaining <= 0) {
-    throw httpError(429, `No CodeRabbit reviews left for ${usage.repository} this hour. Try again in about ${Math.ceil(usage.fullInMs / 6e4)} minutes.`);
-  }
-  const review = beginReview(wt, "coderabbit", { usage: usage ? { ...usage, remaining: Math.max(0, usage.remaining - 1) } : null });
+  const review = beginReview(wt, "coderabbit", { message: "Checking how many CodeRabbit reviews you have left" });
+  startInBackground(wt, review, async () => {
+    const integ = coderabbitReady() ? null : await getIntegrations();
+    if (integ && !integ.coderabbit.installed) throw httpError(409, "The CodeRabbit CLI is not installed. See Settings.");
+    if (integ && !integ.coderabbit.authed) throw httpError(409, "Sign in to CodeRabbit in Settings first.");
+    await refreshWorktree(wt);
+    const usage = await crUsage(wt);
+    if (usage && usage.remaining <= 0) {
+      throw httpError(429, `No CodeRabbit reviews left for ${usage.repository} this hour. Try again in about ${Math.ceil(usage.fullInMs / 6e4)} minutes.`);
+    }
+    review.usage = usage ? { ...usage, remaining: Math.max(0, usage.remaining - 1) } : null;
+    review.message = "Starting";
+  }, () => runCodeRabbit(wt, review));
+  return review;
+}
+function runCodeRabbit(wt, review) {
   runReview(wt, review, "coderabbit", ["review", "--agent", "--base", wt.baseRef ?? "", "--include-untracked"], {
     onEvent: (ev) => {
       if (ev.type === "finding") review.findings.push(addSnippet(wt, toFinding2(ev)));
@@ -1680,7 +1730,6 @@ async function startCodeRabbit(wt) {
       else if (ev.type === "status" && ev.message) review.message = asStr(ev.message);
     }
   });
-  return review;
 }
 
 // src/server/diffs.ts
