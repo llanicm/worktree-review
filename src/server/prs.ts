@@ -24,7 +24,8 @@ function prNode(v: unknown): PRNode | null {
 export async function refreshPRs(): Promise<void> {
   for (const repo of repos.values()) {
     if (!repo.gh) continue;
-    const repoWts = [...wts.values()].filter((w) => w.repoKey === repo.commonDir && w.branch && !w.isMain);
+    // The main checkout too: it's never cleaned up, but a merged PR there says to switch it back.
+    const repoWts = [...wts.values()].filter((w) => w.repoKey === repo.commonDir && w.branch);
     const branches = [...new Set(repoWts.flatMap((w) => (w.branch ? [w.branch] : [])))];
     if (!branches.length) continue;
     const fields = 'nodes { number state isDraft url title headRefOid mergedAt baseRefName }';
@@ -37,7 +38,9 @@ export async function refreshPRs(): Promise<void> {
       if (!isRecord(data)) throw new Error('Unexpected reply from gh');
       const byBranch = new Map(branches.map((b, i) => [b, prNode(data[`b${i}`])]));
       for (const wt of repoWts) {
-        const pr = wt.branch === null ? null : byBranch.get(wt.branch) ?? null;
+        const found = wt.branch === null ? null : byBranch.get(wt.branch) ?? null;
+        // A PR into the branch itself (say, a fork's main into main) isn't this branch's.
+        const pr = found && found.baseRefName !== wt.branch ? found : null;
         if (JSON.stringify(pr) !== JSON.stringify(wt.pr)) {
           wt.pr = pr;
           wt.headInMerged = null;
