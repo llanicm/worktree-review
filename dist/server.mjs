@@ -1013,7 +1013,11 @@ function refreshAgents(s, transcript, paths, ownPath) {
     } else if (size !== a.scannedSize && Date.now() - a.scannedAt > 8e3) {
       a.scannedSize = size;
       a.scannedAt = Date.now();
-      a.worktreePaths = linkSession(readTail(tp, 3 * 1024 * 1024), paths).filter((p) => p !== ownPath);
+      try {
+        a.worktreePaths = linkSession(readTail(tp, 3 * 1024 * 1024), paths).filter((p) => p !== ownPath);
+      } catch {
+        a.scannedSize = -1;
+      }
     }
     result.push(a);
   }
@@ -2075,6 +2079,47 @@ function listDir(p, showHidden) {
   };
 }
 
+// src/server/wake.ts
+var waiters = /* @__PURE__ */ new Map();
+var POLL_MS = 5e4;
+function addWaiter(body, reply, onClose) {
+  const sessionId = isRecord(body) && typeof body.session_id === "string" ? body.session_id : "";
+  const cwd = isRecord(body) && typeof body.cwd === "string" ? body.cwd : void 0;
+  if (!sessionId) return reply({ text: null, done: true });
+  waiters.get(sessionId)?.reply({ text: null, done: true });
+  let finished = false;
+  const w = {
+    cwd,
+    reply: (r) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      if (waiters.get(sessionId) === w) waiters.delete(sessionId);
+      reply(r);
+    }
+  };
+  const timer = setTimeout(() => w.reply({ text: null, done: false }), POLL_MS);
+  waiters.set(sessionId, w);
+  onClose(() => {
+    finished = true;
+    clearTimeout(timer);
+    if (waiters.get(sessionId) === w) waiters.delete(sessionId);
+  });
+  offerReviews();
+}
+function offerReviews() {
+  for (const [id, w] of waiters) {
+    const s = sessions.get(id);
+    if (!s) {
+      w.reply({ text: null, done: true });
+      continue;
+    }
+    if (s.status !== "idle") continue;
+    const text = claimReviews({ session_id: id, cwd: w.cwd });
+    if (text) w.reply({ text, done: true });
+  }
+}
+
 // src/server/routes.ts
 var bodyOf = (raw) => raw;
 var arg = (m, i = 1) => m[i];
@@ -2127,7 +2172,11 @@ var routes = [
     save();
     return { ok: true };
   }],
-  ["POST", /^\/api\/worktrees\/(\w+)\/submit$/, (m, raw) => submitReview(getWt(arg(m)), bodyOf(raw))],
+  ["POST", /^\/api\/worktrees\/(\w+)\/submit$/, (m, raw) => {
+    const review = submitReview(getWt(arg(m)), bodyOf(raw));
+    offerReviews();
+    return review;
+  }],
   ["POST", /^\/api\/worktrees\/(\w+)\/remove$/, (m, raw) => {
     const body = bodyOf(raw);
     const wt = getWt(arg(m));
@@ -2363,6 +2412,18 @@ data: ${JSON.stringify(publicState())}
     req.on("close", () => clients.delete(res));
     return;
   }
+  if (url.pathname === "/api/wait" && req.method === "POST" && req.headers["x-wtr"] === "1") {
+    let body;
+    try {
+      body = await readBody(req);
+    } catch {
+      return send(res, 400, { error: "Invalid JSON" });
+    }
+    addWaiter(body, (r) => send(res, 200, r), (fn) => res.on("close", () => {
+      if (!res.writableEnded) fn();
+    }));
+    return;
+  }
   if (url.pathname.startsWith("/api/")) {
     if (req.method !== "GET" && req.headers["x-wtr"] !== "1") return send(res, 403, { error: "Missing x-wtr header" });
     let match = null;
@@ -2414,7 +2475,10 @@ server.listen(PORT, "127.0.0.1", async () => {
   getIntegrations().then(changed, () => {
   });
   void loop(discoverWorktrees, 3e4);
-  void loop(async () => refreshSessions(), 3e3);
+  void loop(async () => {
+    refreshSessions();
+    offerReviews();
+  }, 3e3);
   void loop(pollWorktrees, 1e3);
   setTimeout(() => void loop(refreshPRs, () => config.prPollMinutes * 6e4), 5e3);
 });

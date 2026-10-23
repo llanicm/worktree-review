@@ -1827,10 +1827,12 @@ var actions = {
   submit: async () => {
     const wt = curWt();
     if (!wt) return;
-    await api("POST", `/api/worktrees/${wt.id}/submit`, { summary: S.summaries[wt.id] || "", targetSession: S.summaries[`${wt.id}:target`] || null });
+    const target = S.summaries[`${wt.id}:target`] || null;
+    const review = await api("POST", `/api/worktrees/${wt.id}/submit`, { summary: S.summaries[wt.id] || "", targetSession: target });
     S.summaries[wt.id] = "";
     S.editors.delete("summary");
-    toast(wt.sessions.length ? "Sent. Claude gets it at the end of its current turn." : "Queued for the next Claude session that works here.");
+    const to = target ? st().sessions.filter((s) => s.sessionId === target) : wt.sessions;
+    toast(review.status === "delivered" ? `Sent to ${review.deliveredTo?.name || "Claude"}, which is starting on it now.` : !to.length ? "Queued for the next Claude session that works here." : to.some((s) => s.status === "busy") ? "Sent. Claude gets it at the end of its current turn." : `Queued. ${to.map((s) => s.name).join(", ")} ${to.length === 1 ? "is" : "are"} idle, so Claude gets it with your next message there.`);
     await reloadComments();
   },
   "cancel-review": async (el) => {
