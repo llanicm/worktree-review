@@ -18,6 +18,17 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
+      # PRs are squash-merged with the title as the commit message, and release-please reads those to
+      # pick the next version and write the changelog.
+      - name: PR title is a conventional commit
+        if: github.event_name == 'pull_request'
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          if ! printf '%s' "$TITLE" | grep -qE '^(feat|fix|perf|refactor|docs|test|build|ci|chore|revert|style)(\([a-z0-9./-]+\))?!?: .+'; then
+            echo "::error::Start the PR title with a conventional commit type, e.g. \"feat: show blame for unchanged lines\" or \"fix(diff): ...\". It becomes the commit message, and release-please reads it."
+            exit 1
+          fi
       # dist/ is built by the build workflow after a merge; a PR that edits it would only conflict.
       - name: PRs leave dist/ alone
         if: github.event_name == 'pull_request'

@@ -216,9 +216,10 @@ own repos or accounts. To refresh the screenshots, run `node extras/demo/screens
 demo is up. The page check, the benchmark and the screenshots need Google Chrome; set `CHROME` to its
 path if it isn't in the usual macOS place.
 
-Releasing is a version bump merged to `main`, then a `v<version>` tag on the commit where CI rebuilt
-`dist/`; see [CONTRIBUTING.md](CONTRIBUTING.md#releasing-maintainers). Running dashboards are replaced
-by the new version on the next session start.
+Releases are automated with release-please, from conventional-commit PR titles: merging the release
+PR it keeps open bumps the version, tags it and publishes the notes; see
+[CONTRIBUTING.md](CONTRIBUTING.md#releasing-maintainers). Running dashboards are replaced by the new
+version on the next session start.
 
 ## Contributing
 
