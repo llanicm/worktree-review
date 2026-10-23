@@ -286,19 +286,56 @@ function reviewButtonHtml(wt) {
   return `${running}<span class="review-run">${button}${S.reviewMenu === wt.id ? menuHtml(wt, idle) : ""}</span>`;
 }
 function findingHtml(f, inline = false) {
-  const loc = f.file ? `${f.file}${f.startLine ? `:${f.startLine}${f.endLine && f.endLine !== f.startLine ? `–${f.endLine}` : ""}` : ""}` : "";
+  const loc2 = f.file ? `${f.file}${f.startLine ? `:${f.startLine}${f.endLine && f.endLine !== f.startLine ? `–${f.endLine}` : ""}` : ""}` : "";
   const acts = f.status === "open" ? `<button class="btn small primary" data-act="cr-send" data-id="${f.id}">Send to Claude</button><button class="btn small" data-act="cr-dismiss" data-id="${f.id}">Dismiss</button>` : f.status === "sent" ? '<span class="muted small">Added to your review as a draft</span>' : `<span class="muted small">Dismissed</span><button class="link-btn" data-act="cr-restore" data-id="${f.id}">undo</button>`;
   const detail = [
     f.comment && f.comment !== f.title ? `<div class="msg-body">${md(f.comment)}</div>` : "",
     f.suggestions ? `<details><summary>Suggested change</summary><pre class="suggestion">${esc(f.suggestions)}</pre></details>` : "",
     f.codegen && f.codegen !== f.comment ? `<details><summary>Fix guidance for agents</summary><div class="msg-body">${md(f.codegen)}</div></details>` : ""
   ].join("");
-  return `<div class="thread cr-finding ${f.source} ${f.status}">
+  return `<div class="thread cr-finding ${f.source} ${f.status}"${inline ? ` id="fd-${esc(f.id)}"` : ""}>
     <div class="msg"><div class="msg-head"><strong class="cr-name">${NAMES[f.source]}</strong><span class="sev ${esc(f.severity)}">${esc(f.severity)}</span>
-      ${!inline && loc ? `<a href="#" class="mono" data-act="cr-jump" data-file="${esc(f.file)}" data-line="${f.endLine || f.startLine || ""}">${esc(loc)}</a>` : ""}</div>
+      ${!inline && loc2 ? `<a href="#" class="mono" data-act="cr-jump" data-file="${esc(f.file)}" data-line="${f.endLine || f.startLine || ""}">${esc(loc2)}</a>` : ""}</div>
       ${f.title ? `<div class="cr-title">${md(f.title)}</div>` : ""}
       ${f.status === "open" || !inline ? detail : ""}</div>
     <div class="thread-actions">${acts}</div></div>`;
+}
+var loc = (f) => f.startLine ? `${f.startLine}${f.endLine && f.endLine !== f.startLine ? `–${f.endLine}` : ""}` : "";
+var jump = (f) => `data-act="cr-jump" data-file="${esc(f.file)}" data-line="${f.endLine || f.startLine || ""}" data-id="${esc(f.id)}"`;
+var inDiff = (f) => !!f.file && !!S.view?.files.some((x) => x.path === f.file && !x.commit);
+function indexHtml(open) {
+  const order = new Map((S.view?.files || []).map((x, i) => [x.path, i]));
+  const byFile = /* @__PURE__ */ new Map();
+  for (const f of [...open].sort((a, b) => (order.get(a.file) ?? 0) - (order.get(b.file) ?? 0) || (a.startLine || 0) - (b.startLine || 0))) {
+    const here = byFile.get(f.file);
+    if (here) here.push(f);
+    else byFile.set(f.file, [f]);
+  }
+  return `<ul class="cr-index">${[...byFile].map(([file, fs]) => `<li>
+    <a href="#" class="cr-file mono" ${jump(fs[0])} title="${esc(file)}">${esc(file)}</a>
+    <ul>${fs.map((f) => `<li><a href="#" class="cr-item" ${jump(f)}>
+      <span class="sev ${esc(f.severity)}">${esc(f.severity)}</span><span class="cr-line mono">${loc(f) ? `L${loc(f)}` : ""}</span><span class="cr-item-title">${md(f.title || f.comment.split("\n")[0] || "Finding")}</span></a></li>`).join("")}</ul>
+  </li>`).join("")}</ul>`;
+}
+function doneHtml(done) {
+  if (!done.length) return "";
+  return `<details class="cr-done"><summary>${done.length} sent or dismissed</summary><ul>${done.map((f) => `<li>
+    <span class="muted small">${f.status === "sent" ? "Sent" : "Dismissed"}</span>
+    <span class="mono small">${esc(f.file)}${loc(f) ? `:${loc(f)}` : ""}</span> <span class="cr-item-title">${md(f.title || "Finding")}</span>
+    ${f.status === "dismissed" ? `<button class="link-btn" data-act="cr-restore" data-id="${esc(f.id)}">undo</button>` : ""}</li>`).join("")}</ul></details>`;
+}
+var SWEEP_S = 2.4;
+var lastCount = /* @__PURE__ */ new Map();
+var phase = (r) => -((Date.now() - r.startedAt) / 1e3 % SWEEP_S);
+function scanHtml(r) {
+  const widths = [62, 84, 48, 70, 36, 78, 54, 66], indents = [0, 8, 8, 16, 16, 8, 0, 8];
+  const ph = phase(r);
+  const n = r.findings.length;
+  const grew = n > (lastCount.get(r.reviewer) ?? 0);
+  lastCount.set(r.reviewer, n);
+  return `<div class="cr-scan" aria-hidden="true"><div class="cr-scan-page">
+    ${widths.map((w, i) => `<i style="width:${w}%;margin-left:${indents[i]}%;animation-delay:${(ph + i / widths.length * SWEEP_S).toFixed(2)}s"></i>`).join("")}
+    <b class="cr-beam" style="animation-delay:${ph.toFixed(2)}s"></b></div>${n ? `<span class="cr-found${grew ? " grew" : ""}">${n}</span>` : ""}</div>`;
 }
 function panelHtml(wt, r) {
   const name = NAMES[r.reviewer];
@@ -308,7 +345,8 @@ function panelHtml(wt, r) {
   let head, body = "";
   if (r.status === "running") {
     head = `${name} is reviewing against <code>${esc(r.baseRef)}</code>`;
-    body = r.reviewer === "coderabbit" ? `<p class="muted">Reviews usually take 2–6 minutes and can take 15 or more. You can leave this page; findings appear here and inline as they arrive.</p>` : `<p class="muted">${r.message ? `${esc(r.message)}…` : "Starting…"}</p><p class="muted">Findings appear here and inline when it's done. You can leave this page.</p>`;
+    const note = r.reviewer === "coderabbit" ? "Reviews usually take 2–6 minutes and can take 15 or more." : r.message ? `${esc(r.message)}…` : "Starting…";
+    body = `<div class="cr-working">${scanHtml(r)}<div><p>${note}</p><p class="muted">${findings.length ? `${findings.length} finding${findings.length === 1 ? "" : "s"} so far. ` : ""}They show in the code as they arrive. You can leave this page.</p></div></div>`;
   } else if (r.status === "done") {
     head = `${name} · ${findings.length ? `${open.length} open of ${findings.length} finding${findings.length === 1 ? "" : "s"}` : "no findings"}`;
     if (!findings.length) body = `<p class="muted">${r.reviewedFiles.length ? `Reviewed ${r.reviewedFiles.length} file${r.reviewedFiles.length === 1 ? "" : "s"} and found` : "Found"} nothing to flag.</p>`;
@@ -320,12 +358,18 @@ function panelHtml(wt, r) {
   if (r.usage) facts.push(`${r.usage.remaining} of ${r.usage.limit} reviews left this hour`);
   if (r.effort) facts.push(`${r.effort} effort`);
   if (r.costUsd) facts.push(`<span title="As Claude Code reports it. On a Claude plan this counts toward your usage rather than being billed.">$${r.costUsd.toFixed(2)}</span>`);
-  return `<div class="panel cr-panel ${r.reviewer}">
+  const shown = open.filter(inDiff), loose = open.filter((f) => !inDiff(f));
+  const byCommit = S.view?.diff.mode === "commits";
+  if (r.status !== "running") lastCount.delete(r.reviewer);
+  return `<div class="panel cr-panel ${r.reviewer} ${r.status}"${r.status === "running" ? ` style="--ph:${phase(r).toFixed(2)}s"` : ""}>
     <div class="panel-head"><span>${head}</span><span class="actions"><span class="muted small">${facts.join(" · ")}</span>${open.length > 1 ? `<button class="btn small" data-act="cr-send-all" data-reviewer="${r.reviewer}">Send all to Claude</button>` : ""}</span></div>
     <div class="panel-body">
       ${stale ? `<div class="callout warn small">The code has changed since this review. Line numbers may be off; run ${name} again for a fresh look.</div>` : ""}
       ${body}
-      <div class="threads cr-list">${findings.map((f) => findingHtml(f)).join("")}</div>
+      ${shown.length ? indexHtml(shown) : ""}
+      ${loose.length ? `<div class="cr-loose"><div class="muted small">${byCommit ? "Switch to All changes to see these in the code." : "Not in this diff, so shown here:"}</div>
+        <div class="threads cr-list">${loose.map((f) => findingHtml(f)).join("")}</div></div>` : ""}
+      ${doneHtml(findings.filter((f) => f.status !== "open"))}
     </div></div>`;
 }
 function reviewPanelsHtml(wt) {
@@ -2007,8 +2051,16 @@ Their folders are deleted. ${merged ? `${merged} merged branch${merged === 1 ? "
       renderMain();
     }
     fillFile(f.path);
+    const id = el.dataset.id;
+    const finding = id ? document.getElementById(`fd-${id}`) : null;
     const row = document.querySelector(`tr.line[data-k="${CSS.escape(keyOf(f.path, "new", el.dataset.line))}"]`);
-    (row || document.getElementById(`f-${fnv(f.path)}`))?.scrollIntoView({ block: "center" });
+    const target = finding || row || document.getElementById(`f-${fnv(f.path)}`);
+    target?.scrollIntoView({ block: "center", behavior: "smooth" });
+    if (finding) {
+      finding.classList.remove("flash");
+      void finding.offsetWidth;
+      finding.classList.add("flash");
+    }
   },
   recheck: () => {
     S.integ = null;
