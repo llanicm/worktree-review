@@ -6,7 +6,6 @@
       "release-type": "node",
       "package-name": "worktree-review",
       "include-component-in-tag": false,
-      "release-as": "2.1.0",
       "extra-files": [
         { "type": "json", "path": ".claude-plugin/plugin.json", "jsonpath": "$.version" }
       ],

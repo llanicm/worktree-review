@@ -18,7 +18,7 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ssh-key: ${{ secrets.BUILD_DEPLOY_KEY }}
       - uses: actions/setup-node@v4
@@ -44,7 +44,7 @@ jobs:
     # workflow's own token, the release PR wouldn't trigger the required check and couldn't be merged.
     steps:
       # The build job may have just pushed a dist/ commit, so release from the tip of main, not the triggering commit.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: main
       - uses: actions/setup-node@v4
