@@ -139,7 +139,7 @@ export function setupHtml(mode: Page) {
 }
 
 export function setupSig(s: PublicState) {
-  if (S.page === 'cleanup') return JSON.stringify([s.jobs, s.worktrees.map((w) => [w.id, w.cleanup, w.busy, w.sessions.length, w.pr?.state])]);
+  if (S.page === 'cleanup') return JSON.stringify([s.jobs, s.worktrees.map((w) => [w.id, w.cleanup, w.busy, w.sessions.length, w.agents.length, w.pr?.state])]);
   return JSON.stringify([s.coderabbitLogin, s.config, s.repos, s.sessions.length, s.worktrees.length, s.onboardedAt]);
 }
 

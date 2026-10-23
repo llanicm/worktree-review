@@ -52,6 +52,15 @@ export interface Session extends SessionRef {
   cwd?: string;
 }
 
+/** A subagent a session started that is still running. */
+export interface AgentRef {
+  agentId: string;
+  description: string;
+  agentType: string;
+  /** The session that started it, which may be working somewhere else. */
+  parent: SessionRef;
+}
+
 export type WorktreeErrorKind = 'broken-link' | 'submodules' | 'dirty' | 'locked' | 'other';
 
 export interface WorktreeError {
@@ -132,6 +141,8 @@ export interface Worktree {
   baseError: string | null | undefined;
   pr: PullRequest | null;
   sessions: SessionRef[];
+  /** Subagents working here, e.g. one started with `isolation: "worktree"`. */
+  agents: AgentRef[];
   cleanup: CleanupStatus | null;
   error: WorktreeError | null;
   /** What's happening to it right now, e.g. "cleanup" or "remove". */

@@ -1,6 +1,6 @@
 // ---------- worktree header & clean-up callouts ----------
 import type { BaseChoices, Worktree } from '../shared/api.ts';
-import { prChip, sessionChip } from './sidebar.ts';
+import { agentChip, inUse, prChip, sessionChip } from './sidebar.ts';
 import { api, errMsg, need, S, st } from './state.ts';
 import { loadView } from './loading.ts';
 import { ago, editorLink, editorName, esc, tilde, toast } from './util.ts';
@@ -19,7 +19,7 @@ export function headerHtml(wt: Worktree) {
         ${wt.error.kind === 'broken-link' ? '<div class="actions" style="margin-top:8px"><button class="btn primary" data-act="repair">Repair links</button></div>' : ''}</div>`
     : '';
   const removeErr = S.removeErrors[wt.id] ? `<div class="callout danger"><strong>Couldn't remove this worktree.</strong><p>${esc(S.removeErrors[wt.id])}</p></div>` : '';
-  if (cs?.kind === 'idle' && !wt.sessions.length && (cs.eligible || cs.forceable)) {
+  if (cs?.kind === 'idle' && !inUse(wt) && (cs.eligible || cs.forceable)) {
     cleanup = `<div class="callout small">No Claude session is using this worktree.
       ${wt.busy ? '<span class="muted"><span class="dot busy"></span> Removing…</span>'
         : cs.eligible ? '<button class="link-btn" data-act="remove">Remove it</button> (the branch is kept)'
@@ -41,7 +41,7 @@ export function headerHtml(wt: Worktree) {
           ${cs.forceable ? `<div class="actions" style="margin-top:8px">${busy || '<button class="btn danger" data-act="remove-anyway">Remove anyway…</button><span class="muted small">The branch is kept either way.</span>'}</div>` : ''}</div>`;
   }
   return `<div class="title-row"><h1>${esc(name)}${pr}</h1>
-      <div class="actions">${prChip(wt.pr)}${wt.sessions.map(sessionChip).join('')}</div></div>
+      <div class="actions">${prChip(wt.pr)}${wt.sessions.map(sessionChip).join('')}${wt.agents.map(agentChip).join('')}</div></div>
     ${wt.pr ? `<div class="meta">${esc(wt.pr.title)}</div>` : ''}
     ${headerMetaHtml(wt)}
     ${err}${removeErr}
