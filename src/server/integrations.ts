@@ -5,7 +5,7 @@ import { CONFIG_PATH, DATA_DIR, VERSION } from './paths.ts';
 import { changed, sessions } from './state.ts';
 import { asStr, rec } from './util.ts';
 
-// ---------- integrations (gh, CodeRabbit, Claude hooks) ----------
+// ---------- integrations (gh, CodeRabbit, Claude) ----------
 
 let lastHookAt: number | null = null;
 export function markHook(): void { lastHookAt = Date.now(); }
@@ -15,6 +15,20 @@ export let crLogin: CodeRabbitLogin | null = null;
 
 /** Whether CodeRabbit is installed and signed in, as of the last check. */
 export const coderabbitReady = (): boolean => !!(integrations.data?.coderabbit.installed && integrations.data?.coderabbit.authed);
+/** Whether the claude CLI was found, as of the last check. */
+export const claudeReady = (): boolean => !!integrations.data?.claude.cliVersion;
+
+// `claude` on the PATH, or else the binary of the session whose hook started this server.
+let claudePath = 'claude';
+export const claudeBin = (): string => claudePath;
+
+async function probeClaude(): Promise<Probe> {
+  const onPath = await probe('claude', ['--version']);
+  const exec = process.env.CLAUDE_CODE_EXECPATH;
+  if (!onPath.missing || !exec) { claudePath = 'claude'; return onPath; }
+  claudePath = exec;
+  return probe(exec, ['--version']);
+}
 
 export interface Probe { ok: boolean; missing?: boolean; out: string }
 
@@ -35,12 +49,13 @@ export function lastJson(text: string): unknown {
 }
 
 async function checkIntegrations(): Promise<Integrations> {
-  const [ghV, ghAuth, crV, crStatus, crPlain] = await Promise.all([
+  const [ghV, ghAuth, crV, crStatus, crPlain, claudeV] = await Promise.all([
     probe('gh', ['--version']),
     probe('gh', ['auth', 'status', '--hostname', 'github.com']),
     probe('coderabbit', ['--version']),
     probe('coderabbit', ['auth', 'status', '--agent']),
     probe('coderabbit', ['auth', 'status']),
+    probeClaude(),
   ]);
   const gh: Integrations['gh'] = { installed: !ghV.missing, version: ghV.out.match(/gh version (\S+)/)?.[1] || null, authed: ghAuth.ok, account: null };
   gh.account = ghAuth.out.match(/account (\S+)/)?.[1] || null;
@@ -57,14 +72,14 @@ async function checkIntegrations(): Promise<Integrations> {
   }
   return {
     gh, coderabbit: cr, coderabbitLogin: crLogin,
-    claude: { lastHookAt, sessions: sessions.size, version: VERSION },
+    claude: { lastHookAt, sessions: sessions.size, version: VERSION, cliVersion: claudeV.ok ? claudeV.out.trim().split(/\s/)[0] || null : null },
     node: process.version, dataDir: DATA_DIR, configPath: CONFIG_PATH,
   };
 }
 
 export async function getIntegrations(force = false): Promise<Integrations> {
   if (!force && integrations.data && Date.now() - integrations.at < 60_000) {
-    return { ...integrations.data, coderabbitLogin: crLogin, claude: { lastHookAt, sessions: sessions.size, version: VERSION } };
+    return { ...integrations.data, coderabbitLogin: crLogin, claude: { ...integrations.data.claude, lastHookAt, sessions: sessions.size } };
   }
   const pending = integrations.pending ?? checkIntegrations().then((data) => {
     integrations = { at: Date.now(), data, pending: null };

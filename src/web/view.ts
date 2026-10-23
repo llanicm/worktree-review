@@ -1,6 +1,6 @@
 // ---------- main view ----------
 import type { Comment, Commit, Worktree } from '../shared/api.ts';
-import { crButtonHtml, crPanelHtml } from './coderabbit.ts';
+import { reviewButtonHtml, reviewPanelsHtml } from './code-review.ts';
 import { cleanupPageHtml } from './cleanup.ts';
 import { keyOf, parseKey } from './diff.ts';
 import { cbarHtml, commitClass, commitOfLine, placedCommentIds, renderFile, threadHtml } from './file.ts';
@@ -62,12 +62,12 @@ export function renderMain() {
       </div>
       <div class="actions">
         ${S.stale ? '<span class="banner">New changes landed. <button class="btn small" data-act="refresh">Refresh</button></span>' : ''}
-        ${crButtonHtml(wt)}
+        ${reviewButtonHtml(wt)}
         ${collapseAllHtml(v)}
         <button class="btn" data-act="mark-reviewed" title="Remember this exact state so you can see only what changes next">Mark as reviewed</button>
       </div>
     </div>
-    ${crPanelHtml(wt)}
+    ${reviewPanelsHtml(wt)}
     ${v.diff.mode !== 'commits' && v.diff.truncated ? '<div class="callout warn">This diff is very large and was cut off.</div>' : ''}
     ${orphanPanel}
     ${otherViewHtml(otherView, byCommit)}

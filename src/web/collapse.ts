@@ -20,7 +20,7 @@ function syncOrphan(page: Element, v: View): boolean {
   const html = orphanHtml(unplacedComments(v).orphan);
   if (html === v.orphanHtml) return true;
   v.orphanHtml = html;
-  const cur = page.querySelector(':scope > div.panel:not(.cr-panel)');
+  const cur = page.querySelector(':scope > div.panel');
   if (cur) {
     if (html) { replaceWith(cur, html); return true; }
     // Removing it leaves two whitespace nodes side by side; the parser would have produced one.
@@ -30,17 +30,17 @@ function syncOrphan(page: Element, v: View): boolean {
     return true;
   }
   if (!html) return true;
-  // Absent -> present. renderMain's template separates its five slots (CodeRabbit panel, "cut off" callout, this panel,
+  // Absent -> present. renderMain's template separates its five slots (code review panels, "cut off" callout, this panel,
   // the other-view panel, the files) with "\n    "; empty slots merge their whitespace into one text node. Split it where this slot sits.
   const toolbar = page.querySelector(':scope > .toolbar');
   if (!toolbar) return false;
   let prev: Element = toolbar, slot = -1;
   let next = prev.nextElementSibling;
-  if (next?.matches('.cr-panel')) { prev = next; slot = 0; next = next.nextElementSibling; }
+  if (next?.matches('.cr-panels')) { prev = next; slot = 0; next = next.nextElementSibling; }
   if (next?.matches('div.callout.warn')) { prev = next; slot = 1; }
   const ws = prev.nextSibling;
   const SEP = '\n    '.length;
-  // Slots are numbered 0-4 (CodeRabbit panel, "cut off" callout, this panel, other-view panel, files); the whitespace run
+  // Slots are numbered 0-4 (code review panels, "cut off" callout, this panel, other-view panel, files); the whitespace run
   // between the previous and next present slot holds one separator per slot in between.
   const nextSlot = prev.nextElementSibling?.matches('details.panel:not(.commits-panel):not(.files-summary)') ? 3 : 4;
   if (!(ws instanceof Text) || ws.length < (nextSlot - slot) * SEP) return false;

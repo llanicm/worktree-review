@@ -35,6 +35,7 @@ function foldersHtml() {
   </div>`;
 }
 
+const EFFORT_OPTIONS: [string, string][] = [['low', 'Low (quickest)'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high'], ['max', 'Max (most thorough)']];
 const EDITOR_OPTIONS: [string, string][] = [['vscode', 'VS Code'], ['cursor', 'Cursor'], ['windsurf', 'Windsurf'], ['zed', 'Zed'], ['none', 'No editor links']];
 
 export function setupHtml(mode: Page) {
@@ -98,7 +99,16 @@ export function setupHtml(mode: Page) {
   }
   steps.push(stepHtml(crIcon, 'CodeRabbit <span class="muted small">optional</span>', crBody));
 
-  // 5. Preferences
+  // 5. Claude code review
+  const cli = I?.claude.cliVersion;
+  steps.push(stepHtml(!I ? ICON_WAIT : cli ? ICON_OK : ICON_OPT, 'Code review by Claude <span class="muted small">optional</span>', !I ? '<p class="muted">Checking…</p>'
+    : cli ? `<p>Claude can review a worktree with Claude Code's built-in <code>/code-review</code> (claude ${esc(cli)}). It runs on this machine as a separate, read-only session and counts toward your Claude usage.</p>
+      <label class="setting row"><span>Effort to start with</span>
+        <select data-cfg="reviewEffort">${EFFORT_OPTIONS.map(([v, l]) => `<option value="${v}" ${c.reviewEffort === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
+      <p class="muted">You can pick a different effort each time you run a review. Higher effort looks harder and takes longer.</p>`
+    : `<p>The <code>claude</code> command wasn't found on this server's PATH, so Claude can't run code reviews here. Make sure it's on your PATH, then <button class="link-btn" data-act="recheck">check again</button>.</p>`));
+
+  // 6. Preferences
   const notif = !('Notification' in window) ? 'unsupported' : Notification.permission;
   steps.push(stepHtml(ICON_OK, 'Preferences', `
     <label class="setting row"><span>Open files in</span>

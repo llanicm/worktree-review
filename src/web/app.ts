@@ -8,7 +8,9 @@ import { connect } from './live.ts';
 import { onHash } from './loading.ts';
 import { saveConfig } from './setup.ts';
 import { chooseBase, redrawHeaderMeta } from './header.ts';
-import { $, errMsg, need, S, view } from './state.ts';
+import type { ReviewEffort, Reviewer } from '../shared/api.ts';
+import { reviewPick } from './code-review.ts';
+import { $, curWt, errMsg, need, S, view } from './state.ts';
 import { elapsed, toast } from './util.ts';
 import { renderMain } from './view.ts';
 
@@ -22,6 +24,7 @@ setInterval(() => {
 document.addEventListener('click', (e) => {
   const target = e.target;
   if (!(target instanceof Element)) return;
+  if (S.reviewMenu && !target.closest('.review-run')) { S.reviewMenu = null; renderMain(); }
   const el = target.closest<HTMLElement>('[data-act]');
   if (!el || el.tagName === 'SELECT' || (el instanceof HTMLInputElement && el.type === 'checkbox' && e.type === 'click' && !['viewed', 'auto-cleanup', 'picker-hidden', 'clean-pick'].includes(el.dataset.act ?? ''))) return;
   const fn = actions[el.dataset.act ?? ''];
@@ -35,6 +38,13 @@ document.addEventListener('change', (e) => {
   if (!(el instanceof HTMLElement)) return;
   if (el.dataset.act === 'target') S.summaries[`${S.selId}:target`] = valueOf(el);
   if (el.dataset.act === 'base-select') chooseBase(valueOf(el));
+  if (el.dataset.review) {
+    const wt = curWt();
+    if (!wt) return;
+    const pick = reviewPick(wt);
+    S.reviewPick = el.dataset.review === 'reviewer' ? { ...pick, reviewer: valueOf(el) as Reviewer } : { ...pick, effort: valueOf(el) as ReviewEffort };
+    renderMain();
+  }
   if (el.dataset.cfg) {
     const key = el.dataset.cfg;
     const value = el instanceof HTMLInputElement && el.type === 'checkbox' ? el.checked : el instanceof HTMLInputElement && el.type === 'number' ? Number(el.value) : valueOf(el);
@@ -58,6 +68,7 @@ document.addEventListener('input', (e) => {
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && $('#picker')) { closePicker(); return; }
   if (e.key === 'Escape' && $('#result') && !$('#result')?.dataset.busy) { closeResult(); return; }
+  if (e.key === 'Escape' && S.reviewMenu) { S.reviewMenu = null; renderMain(); return; }
   const el = e.target;
   if (!(el instanceof HTMLElement)) return;
   if (el.dataset.act === 'base-input') {

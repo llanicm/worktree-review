@@ -24,7 +24,7 @@ properly, and your comments reach the right session without you switching to it.
 
 The sidebar groups worktrees into **Claude is working** (a live session is using it), **Recent**,
 **PR merged** and **Older**. A blue dot means it changed since you last reviewed it. Each one shows
-its PR, uncommitted changes, open comments and CodeRabbit findings. Turn on notifications to hear
+its PR, uncommitted changes, open comments and code review findings. Turn on notifications to hear
 when a session finishes work you haven't looked at.
 
 ### Review it like a pull request
@@ -59,12 +59,19 @@ working in that worktree, at the end of its current turn or with your next messa
 replies in the thread or resolves the comment with a note, and replying sends the thread back.
 **Copy as prompt** is there if you'd rather paste it yourself.
 
-### CodeRabbit, optional
+### Code review by CodeRabbit or Claude
 
-With the [CodeRabbit CLI](https://docs.coderabbit.ai/cli/overview) signed in, **Run CodeRabbit**
-reviews the worktree against the same base. Findings appear inline, next to your own comments.
-**Send to Claude** turns a finding into one of your draft comments, and **Dismiss** hides it. If
-your company has CodeRabbit on GitHub, reviews of its repos use the company plan.
+**Run code review** reviews the worktree against the same base, with either reviewer:
+
+- **Claude** runs Claude Code's built-in `/code-review` on your machine, as a separate, read-only
+  session that counts toward your Claude usage. Pick its effort, from *low* (quickest) to *max* (most
+  thorough), each time you run it; the effort it starts with is in Settings.
+- **CodeRabbit**, with the [CodeRabbit CLI](https://docs.coderabbit.ai/cli/overview) signed in. If
+  your company has CodeRabbit on GitHub, reviews of its repos use the company plan.
+
+When both are available, it asks which to use. Each keeps its own latest review, so you can run
+both. Findings appear inline, next to your own comments, labelled with who found them. **Send to
+Claude** turns a finding into one of your draft comments, and **Dismiss** hides it.
 
 ![A comment thread with Claude's reply, and a CodeRabbit finding, inline in the diff](docs/screenshots/coderabbit.png)
 
@@ -93,8 +100,8 @@ worktree with a large `node_modules`. Every removal has a restore command under 
 ### Settings in the app
 
 The first visit walks you through setup. **Settings** (the gear in the sidebar) covers which folders
-are scanned, with a folder picker, GitHub and CodeRabbit status, signing in to CodeRabbit,
-auto-cleanup, which editor the *open* links use, and timings.
+are scanned, with a folder picker, GitHub and CodeRabbit status, signing in to CodeRabbit, the effort
+Claude's code reviews start with, auto-cleanup, which editor the *open* links use, and timings.
 
 ![Settings](docs/screenshots/settings.png)
 
@@ -155,6 +162,7 @@ dashboard: `curl -X POST -H 'x-wtr: 1' localhost:4747/api/shutdown`, then start 
 | `recentDays` | `3` | How long a worktree counts as *Recent* |
 | `prPollMinutes` | `5` | How often PR status is checked |
 | `editor` | `"vscode"` | Target of the *open* links: `vscode`, `cursor`, `windsurf`, `zed` or `none` |
+| `reviewEffort` | `"low"` | Effort Claude's code reviews start with: `low`, `medium`, `high`, `xhigh` or `max` |
 
 Set `WTR_PORT` in your environment to use a different port.
 
@@ -165,8 +173,8 @@ clone this repo and run `extras/install-service.sh`. `extras/uninstall-service.s
 
 ## Privacy and security
 
-- Your code stays on your machine, apart from what CodeRabbit reviews when you run it. The network
-  is used only by `gh`, `coderabbit`, a `git fetch` of a merged PR's commits when they aren't local,
+- Your code stays on your machine, apart from what CodeRabbit or Claude reviews when you run it. The
+  network is used only by `gh`, `coderabbit`, `claude` during a code review, a `git fetch` of a merged PR's commits when they aren't local,
   and the page loading highlight.js from cdnjs.
 - The server listens on `127.0.0.1` only, rejects requests addressed to any host other than
   localhost, and requires an `x-wtr` header on anything that changes state, which other websites
@@ -177,7 +185,7 @@ clone this repo and run `extras/install-service.sh`. `extras/uninstall-service.s
 ## Development
 
 Worktree Review is strict TypeScript with no runtime dependencies. The server shells out to `git`,
-`gh` and `coderabbit`; the page is plain DOM code with no framework. `build.mjs` compiles `src/` with
+`gh`, `coderabbit` and `claude`; the page is plain DOM code with no framework. `build.mjs` compiles `src/` with
 esbuild. The result in `dist/` is committed, because a Claude Code plugin is installed straight from
 the repo with no build step, but nobody builds it by hand: a workflow rebuilds and commits it after
 every change to `main`. Running it needs Node 18+; developing it needs Node 22.18+, which runs the
@@ -185,7 +193,7 @@ TypeScript tests directly.
 
 | Path | |
 |---|---|
-| `src/server/` | The server: worktree discovery, sessions, diffs and blame, comments and hook delivery, PRs and cleanup, CodeRabbit, settings. `main.ts` is the entry point |
+| `src/server/` | The server: worktree discovery, sessions, diffs and blame, comments and hook delivery, PRs and cleanup, code reviews by CodeRabbit and Claude, settings. `main.ts` is the entry point |
 | `src/web/` | The page. `lazy.ts` draws only the diff near the screen; `collapse.ts` updates collapsed sections in place. `worker/sse-worker.ts` shares one live connection across tabs, because browsers cap connections per host |
 | `src/shared/api.ts` | Types for every API request and response, used by both sides, so a change to one breaks the compile on the other |
 | `src/scripts/` | `hook.ts` hands submitted reviews to the right session; `ensure-server.ts` starts or upgrades the server |
@@ -202,8 +210,8 @@ npm run check       # types, then npm test (what CI runs on every PR)
 npm run bench       # timings on a large worktree
 ```
 
-The demo builds a made-up repo with worktrees, Claude sessions, PRs and a CodeRabbit review in
-`.demo/`, with its own home folder and stand-ins for `gh` and `coderabbit`, so it never touches your
+The demo builds a made-up repo with worktrees, Claude sessions, PRs and CodeRabbit and Claude reviews
+in `.demo/`, with its own home folder and stand-ins for `gh`, `coderabbit` and `claude`, so it never touches your
 own repos or accounts. To refresh the screenshots, run `node extras/demo/screenshots.mjs` while the
 demo is up. The page check, the benchmark and the screenshots need Google Chrome; set `CHROME` to its
 path if it isn't in the usual macOS place.

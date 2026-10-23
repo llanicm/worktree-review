@@ -1,11 +1,13 @@
 import fs from 'node:fs';
 import type {
-  BaseChoices, BlameResponse, FileBlame, CodeRabbitLogin, CodeRabbitResponse, CodeRabbitReview, Comment, CommentsResponse, DiffResponse, DirListing,
-  Finding, HookResponse, Integrations, Job, NewComment, Ok, PromptResponse, PublicState, RepairResult, Review, SendAllResponse,
-  ShutdownResponse,
+  BaseChoices, BlameResponse, FileBlame, CodeRabbitLogin, CodeReview, CodeReviewsResponse, Comment, CommentsResponse, DiffResponse, DirListing,
+  Finding, HookResponse, Integrations, Job, NewComment, Ok, PromptResponse, PublicState, RepairResult, Review, Reviewer, SendAllResponse,
+  ShutdownResponse, StartCodeReview,
 } from '../shared/api.ts';
 import { cleanupStatus } from './cleanup-status.ts';
-import { cancelCodeRabbit, crUsage, findingToComment, getFinding, startCodeRabbit } from './coderabbit.ts';
+import { startClaudeReview } from './claude-review.ts';
+import { cancelReview, findingToComment, getFinding, isReviewer, reviewOf } from './code-review.ts';
+import { crUsage, startCodeRabbit } from './coderabbit.ts';
 import { getBlame, getDiff, getFileBlame } from './diffs.ts';
 import { gitOk, httpError } from './exec.ts';
 import { getIntegrations, markHook, probe, startCodeRabbitLogin } from './integrations.ts';
@@ -22,8 +24,8 @@ import { baseChoices, getWt, refreshWorktree } from './worktrees.ts';
 
 /** Everything a route can answer with. Handlers are checked against this, so a response can't drift from ../shared/api.ts. */
 type ApiResult =
-  | PublicState | BaseChoices | DiffResponse | BlameResponse | FileBlame | CommentsResponse | PromptResponse | Ok | Job | RepairResult | CodeRabbitResponse
-  | CodeRabbitReview | Finding | SendAllResponse | DirListing | Integrations | CodeRabbitLogin | Comment | Review | ShutdownResponse | HookResponse;
+  | PublicState | BaseChoices | DiffResponse | BlameResponse | FileBlame | CommentsResponse | PromptResponse | Ok | Job | RepairResult | CodeReviewsResponse
+  | CodeReview | Finding | SendAllResponse | DirListing | Integrations | CodeRabbitLogin | Comment | Review | ShutdownResponse | HookResponse;
 
 type Handler = (m: RegExpMatchArray, body: unknown, url: URL) => ApiResult | Promise<ApiResult>;
 export type Route = readonly [method: string, re: RegExp, handler: Handler];
@@ -117,14 +119,20 @@ export const routes: Route[] = [
   ['POST', /^\/api\/worktrees\/(\w+)\/repair$/, async (m) => repairWorktrees([getWt(arg(m))])],
   ['POST', /^\/api\/repair$/, async () => repairWorktrees([...wts.values()].filter((w) => w.error?.kind === 'broken-link'))],
   ['POST', /^\/api\/config$/, async (_m, body): Promise<Ok> => { await updateConfig(body); return { ok: true }; }],
-  ['GET', /^\/api\/worktrees\/(\w+)\/coderabbit$/, async (m, _body, url): Promise<CodeRabbitResponse> => {
+  ['GET', /^\/api\/worktrees\/(\w+)\/code-reviews$/, async (m, _body, url): Promise<CodeReviewsResponse> => {
     const wt = getWt(arg(m));
-    const review = state.coderabbit[wt.id] || null;
-    return { review, usage: url.searchParams.has('usage') ? await crUsage(wt) : review?.usage || null };
+    const reviews = state.codeReviews[wt.id] ?? {};
+    return { reviews, usage: url.searchParams.has('usage') ? await crUsage(wt) : reviews.coderabbit?.usage || null };
   }],
-  ['POST', /^\/api\/worktrees\/(\w+)\/coderabbit$/, (m) => startCodeRabbit(getWt(arg(m)))],
-  ['POST', /^\/api\/worktrees\/(\w+)\/coderabbit\/cancel$/, (m): Ok => {
-    cancelCodeRabbit(arg(m));
+  ['POST', /^\/api\/worktrees\/(\w+)\/code-review$/, (m, raw) => {
+    const body = bodyOf<Partial<StartCodeReview>>(raw);
+    const wt = getWt(arg(m));
+    if (body.reviewer === 'coderabbit') return startCodeRabbit(wt);
+    if (body.reviewer === 'claude') return startClaudeReview(wt, body.effort);
+    throw httpError(400, 'Choose a reviewer: coderabbit or claude.');
+  }],
+  ['POST', /^\/api\/worktrees\/(\w+)\/code-review\/(coderabbit|claude)\/cancel$/, (m): Ok => {
+    cancelReview(arg(m), arg(m, 2) as Reviewer);
     return { ok: true };
   }],
   ['POST', /^\/api\/findings\/(\w+)\/(send|dismiss|restore)$/, (m): Finding => {
@@ -136,9 +144,10 @@ export const routes: Route[] = [
     changed();
     return finding;
   }],
-  ['POST', /^\/api\/worktrees\/(\w+)\/coderabbit\/send-all$/, (m): SendAllResponse => {
+  ['POST', /^\/api\/worktrees\/(\w+)\/code-review\/(coderabbit|claude)\/send-all$/, (m): SendAllResponse => {
     const wt = getWt(arg(m));
-    const r = state.coderabbit[wt.id];
+    const reviewer = arg(m, 2);
+    const r = isReviewer(reviewer) ? reviewOf(wt.id, reviewer) : undefined;
     const open = (r?.findings || []).filter((f) => f.status === 'open');
     for (const f of open) findingToComment(wt.id, f);
     save();
