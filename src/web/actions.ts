@@ -311,6 +311,11 @@ export const actions: Record<string, Action> = {
     target?.scrollIntoView({ block: 'center', behavior: 'smooth' });
     if (finding) { finding.classList.remove('flash'); void finding.offsetWidth; finding.classList.add('flash'); }
   },
+  'cr-panel': (el, e) => {
+    e.preventDefault();
+    const panel = document.getElementById(`cr-panel-${attr(el, 'reviewer')}`);
+    panel?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  },
   recheck: () => { S.integ = null; renderMain(); return loadIntegrations(true); },
   'copy-text': (el) => copy(attr(el, 'text')),
   'cr-login': async () => { await api('POST', '/api/integrations/coderabbit/login'); },

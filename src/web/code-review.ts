@@ -28,8 +28,9 @@ export function reviewPick(wt: Worktree): { reviewer: Reviewer; effort: ReviewEf
 function runningHtml(wt: Worktree, k: Reviewer) {
   const r = wt.codeReviews[k];
   if (r?.status !== 'running') return '';
-  return `<span class="cr-running ${k}"><span class="dot busy"></span>${NAMES[k]} reviewing <span class="cr-elapsed" data-start="${r.startedAt}">${elapsed(r.startedAt)}</span></span>
-    <button class="btn small" data-act="review-cancel" data-reviewer="${k}">Cancel</button>`;
+  // The panel below has the details and Cancel; this stays in view as the page scrolls.
+  return `<a href="#" class="cr-running ${k}" data-act="cr-panel" data-reviewer="${k}" title="${NAMES[k]} is reviewing. Show the review"><span class="dot busy"></span>${NAMES[k]}
+    <span class="cr-elapsed" data-start="${r.startedAt}">${elapsed(r.startedAt)}</span></a>`;
 }
 
 function menuHtml(wt: Worktree, idle: Reviewer[]) {
@@ -131,8 +132,9 @@ function panelHtml(wt: Worktree, r: CodeReview) {
   let head, body = '';
   if (r.status === 'running') {
     head = `${name} is reviewing against <code>${esc(r.baseRef)}</code>`;
-    const note = `${r.message ? `${esc(r.message)}… ` : ''}${r.reviewer === 'coderabbit' ? '<span class="muted">Reviews usually take 2–6 minutes and can take 15 or more.</span>' : ''}`;
-    body = `<div class="cr-working">${scanHtml(r)}<div><p>${note}</p><p class="muted">${findings.length ? `${findings.length} finding${findings.length === 1 ? '' : 's'} so far. ` : ''}They show in the code as they arrive. You can leave this page.</p></div></div>`;
+    const so = findings.length ? `${findings.length} finding${findings.length === 1 ? '' : 's'} so far, shown in the code` : 'Findings show in the code as they arrive';
+    const note = `${so}.${r.reviewer === 'coderabbit' ? ' Reviews usually take 2–6 minutes and can take 15 or more.' : ''}`;
+    body = `<div class="cr-working">${scanHtml(r)}<div class="cr-status"><div class="cr-activity" title="${esc(r.message || '')}">${esc(r.message || 'Working')}…</div><div class="muted small">${note}</div></div></div>`;
   } else if (r.status === 'done') {
     head = `${name} · ${findings.length ? `${open.length} open of ${findings.length} finding${findings.length === 1 ? '' : 's'}` : 'no findings'}`;
     if (!findings.length) body = `<p class="muted">${r.reviewedFiles.length ? `Reviewed ${r.reviewedFiles.length} file${r.reviewedFiles.length === 1 ? '' : 's'} and found` : 'Found'} nothing to flag.</p>`;
@@ -140,15 +142,15 @@ function panelHtml(wt: Worktree, r: CodeReview) {
     head = `${name} review ${r.status === 'cancelled' ? 'cancelled' : 'failed'}`;
     body = `<p class="error">${esc(r.error || 'Something went wrong.')}</p>`;
   }
-  const facts = [r.status === 'running' ? `started ${ago(r.startedAt)}` : ago(r.finishedAt || r.startedAt)];
+  const facts = [r.status === 'running' ? `<span class="cr-elapsed" data-start="${r.startedAt}" title="How long it has been running">${elapsed(r.startedAt)}</span>` : ago(r.finishedAt || r.startedAt)];
   if (r.usage) facts.push(`${r.usage.remaining} of ${r.usage.limit} reviews left this hour`);
   if (r.effort) facts.push(`${r.effort} effort`);
   if (r.costUsd) facts.push(`<span title="As Claude Code reports it. On a Claude plan this counts toward your usage rather than being billed.">$${r.costUsd.toFixed(2)}</span>`);
   const shown = open.filter(inDiff), loose = open.filter((f) => !inDiff(f));
   const byCommit = S.view?.diff.mode === 'commits';
   if (r.status !== 'running') lastCount.delete(r.reviewer);
-  return `<div class="panel cr-panel ${r.reviewer} ${r.status}"${r.status === 'running' ? ` style="--ph:${phase(r).toFixed(2)}s"` : ''}>
-    <div class="panel-head"><span>${head}</span><span class="actions"><span class="muted small">${facts.join(' · ')}</span>${open.length > 1 ? `<button class="btn small" data-act="cr-send-all" data-reviewer="${r.reviewer}">Send all to Claude</button>` : ''}</span></div>
+  return `<div class="panel cr-panel ${r.reviewer} ${r.status}" id="cr-panel-${r.reviewer}"${r.status === 'running' ? ` style="--ph:${phase(r).toFixed(2)}s"` : ''}>
+    <div class="panel-head"><span>${head}</span><span class="actions"><span class="muted small">${facts.join(' · ')}</span>${r.status === 'running' ? `<button class="btn small" data-act="review-cancel" data-reviewer="${r.reviewer}">Cancel</button>` : ''}${open.length > 1 ? `<button class="btn small" data-act="cr-send-all" data-reviewer="${r.reviewer}">Send all to Claude</button>` : ''}</span></div>
     <div class="panel-body">
       ${stale ? `<div class="callout warn small">The code has changed since this review. Line numbers may be off; run ${name} again for a fresh look.</div>` : ''}
       ${body}
