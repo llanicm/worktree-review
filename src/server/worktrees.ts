@@ -58,7 +58,7 @@ export async function discoverWorktrees(): Promise<void> {
           id, path: w.path, repoKey: repo.commonDir, repoName: repo.name, isMain: i === 0,
           branch: null, detached: false, locked: false,
           fingerprint: null, dirty: 0, dirtyFiles: [], lastActivity: 0, ahead: 0, stats: null, nextCheck: 0,
-          sessions: [], pr: undefined, headInMerged: null,
+          sessions: [], agents: [], pr: undefined, headInMerged: null,
         };
         wts.set(id, wt);
         wtState(id, w.path);
@@ -197,7 +197,7 @@ export function refreshWorktree(wt: WorktreeRecord, { force = false } = {}): Pro
 }
 
 function isActive(wt: WorktreeRecord): boolean {
-  return wt.sessions.length > 0 || Date.now() - wt.lastActivity < 2 * 3600_000;
+  return wt.sessions.length > 0 || wt.agents.length > 0 || Date.now() - wt.lastActivity < 2 * 3600_000;
 }
 
 export async function pollWorktrees(): Promise<void> {

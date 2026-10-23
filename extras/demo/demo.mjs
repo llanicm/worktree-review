@@ -398,6 +398,15 @@ const session = (id, name, status, cwd) => {
 session('11111111-aaaa-4aaa-8aaa-111111111111', 'shop-checkout', 'idle', disc);
 session('22222222-bbbb-4bbb-8bbb-222222222222', 'shop-search', 'busy', search);
 session('33333333-cccc-4ccc-8ccc-333333333333', 'shop-main', 'idle', REPO);
+// shop-main has a subagent fixing tax rounding in its own worktree, and one that has finished in the spike.
+const subagent = (sessionId, agentId, meta, cwd) => {
+  const dir = path.join(CLAUDE, 'projects', 'shop', sessionId, 'subagents');
+  fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(path.join(dir, `agent-${agentId}.meta.json`), JSON.stringify({ agentType: 'general-purpose', spawnedWithWorktree: true, ...meta }));
+  fs.writeFileSync(path.join(dir, `agent-${agentId}.jsonl`), JSON.stringify({ type: 'user', isSidechain: true, agentId, cwd, sessionId }) + '\n');
+};
+subagent('33333333-cccc-4ccc-8ccc-333333333333', 'a1b2c3d4e5f6a7b8c', { description: 'Round tax per line item', worktreePath: rounding }, rounding);
+subagent('33333333-cccc-4ccc-8ccc-333333333333', 'a9f8e7d6c5b4a3f2e', { description: 'Sketch a GraphQL gateway', worktreePath: spike, finished: true }, spike);
 fs.writeFileSync(path.join(DEMO, 'pids'), pids.join('\n'));
 
 // ---------- dashboard state ----------

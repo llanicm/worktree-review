@@ -668,6 +668,7 @@ function renderJobs() {
 }
 
 // src/web/sidebar.ts
+var inUse = (wt) => wt.sessions.length > 0 || wt.agents.length > 0;
 function defaultWorktree(list) {
   const g = grouped(list);
   return [...g.working, ...g.recent].find((w) => w.review.needsReview) ?? g.working[0] ?? g.recent[0] ?? list.find((w) => !w.isMain) ?? list[0];
@@ -676,7 +677,7 @@ function grouped(list) {
   const recentMs = st().config.recentDays * 864e5;
   const g = { working: [], merged: [], recent: [], older: [] };
   for (const wt of list) {
-    if (wt.sessions.length) g.working.push(wt);
+    if (inUse(wt)) g.working.push(wt);
     else if (wt.pr?.state === "MERGED") g.merged.push(wt);
     else if (Date.now() - wt.lastActivity < recentMs) g.recent.push(wt);
     else g.older.push(wt);
@@ -692,6 +693,10 @@ function prChip(pr) {
 }
 function sessionChip(s) {
   return `<span class="chip" title="Claude session ${esc(s.name)} is ${esc(s.status)}"><span class="dot ${esc(s.status)}"></span>${esc(s.name)}</span>`;
+}
+function agentChip(a) {
+  const what = a.description || a.agentType;
+  return `<span class="chip agent" title="${esc(a.agentType)} subagent started by Claude session ${esc(a.parent.name)} (${esc(a.parent.status)})${a.description ? `: ${esc(a.description)}` : ""}"><span class="dot busy"></span><span class="agent-parent">${esc(a.parent.name)}</span><span class="agent-sep">›</span><span class="agent-what">${esc(what)}</span></span>`;
 }
 function reviewChip(wt) {
   const running = REVIEWERS.filter((k) => wt.codeReviews[k]?.status === "running");
@@ -713,7 +718,7 @@ function wtItem(wt, showNew) {
       <span class="wt-path">${esc(shortPath(wt.path))}</span><span>· ${ago(wt.lastActivity)}</span>
     </div>
     <div class="wt-sub">
-      ${wt.sessions.map(sessionChip).join("")}${prChip(wt.pr)}
+      ${wt.sessions.map(sessionChip).join("")}${wt.agents.map(agentChip).join("")}${prChip(wt.pr)}
       ${nComments ? `<span class="chip comments">${nComments} comment${nComments === 1 ? "" : "s"}</span>` : ""}
       ${wt.busy ? '<span class="chip busy-chip"><span class="dot busy"></span>removing…</span>' : ""}
       ${wt.error ? `<span class="chip closed" title="${esc(wt.error.message)}">${wt.error.kind === "broken-link" ? "broken link" : "can't read"}</span>` : wt.dirtyKind === "lockfile-only" ? '<span class="chip" title="Only a lockfile changed">lockfile changed</span>' : wt.dirtyKind === "deleted-only" ? `<span class="chip" title="Tracked files missing from disk; nothing is lost">${wt.dirty} missing</span>` : wt.dirty ? `<span class="chip" title="Uncommitted changes">${wt.dirty} uncommitted</span>` : ""}
@@ -727,7 +732,7 @@ function renderSidebar() {
   const list = S.st.worktrees.filter((w) => !f || (w.branch || "").toLowerCase().includes(f) || w.path.toLowerCase().includes(f));
   const g = grouped(list);
   const safe = g.merged.filter((w) => w.cleanup?.kind === "merged" && w.cleanup.eligible).length;
-  const idle = S.st.worktrees.filter((w) => w.cleanup && !w.sessions.length).length;
+  const idle = S.st.worktrees.filter((w) => w.cleanup && !inUse(w)).length;
   const parts = [];
   const section = (title, items, opts = {}) => {
     if (!items.length && !opts.always) return;
@@ -773,7 +778,7 @@ function renderSidebar() {
   need("#list").innerHTML = parts.join("");
   renderJobs();
   const recentMs = S.st.config.recentDays * 864e5;
-  const n = S.st.worktrees.filter((w) => w.review.needsReview && (w.sessions.length || Date.now() - w.lastActivity < recentMs)).length;
+  const n = S.st.worktrees.filter((w) => w.review.needsReview && (inUse(w) || Date.now() - w.lastActivity < recentMs)).length;
   document.title = n ? `(${n}) Worktree Review` : "Worktree Review";
 }
 
@@ -782,7 +787,7 @@ var hasCleanup = (w) => !!w.cleanup;
 function cleanupGroups() {
   const g = { ready: [], look: [], blocked: [] };
   for (const w of st().worktrees) {
-    if (!hasCleanup(w) || w.sessions.length) continue;
+    if (!hasCleanup(w) || inUse(w)) continue;
     const cs = w.cleanup;
     (cs.eligible && !w.busy ? g.ready : cs.forceable ? g.look : g.blocked).push(w);
   }
@@ -812,12 +817,12 @@ function cleanupPageHtml() {
   const g = cleanupGroups();
   const picked = g.ready.filter(cleanPicked).length;
   const running = state.jobs.some((j) => j.kind === "cleanup" && j.status === "running");
-  const inUse = state.worktrees.filter((w) => w.cleanup && w.sessions.length).length;
+  const busy = state.worktrees.filter((w) => w.cleanup && inUse(w)).length;
   const sec = (title, sub, items, opts) => items.length ? `<section class="clean-sec"><h2>${title} <span class="count">${items.length}</span>${opts.tools || ""}</h2>
       ${sub ? `<p class="muted small">${sub}</p>` : ""}${items.map((w) => cleanRow(w, opts)).join("")}</section>` : "";
   return `<div class="page setup clean-page">
     <h1>Clean up worktrees</h1>
-    <p class="muted">Worktrees no Claude session is using${inUse ? ` (${inUse} in use ${inUse === 1 ? "is" : "are"} left out)` : ""}. Removing one deletes its folder.
+    <p class="muted">Worktrees no Claude session is using${busy ? ` (${busy} in use ${busy === 1 ? "is" : "are"} left out)` : ""}. Removing one deletes its folder.
       Branches are kept, except a merged branch whose commits are all in its PR, and every removal can be restored from <em>Cleaned up</em> in the sidebar.</p>
     ${!g.ready.length && !g.look.length && !g.blocked.length ? '<div class="empty">Nothing to clean up.</div>' : ""}
     ${sec("Ready to remove", `Nothing uncommitted would be lost. Ones changed in the last ${state.config.recentDays} days start unticked.`, g.ready, {
@@ -950,7 +955,7 @@ function setupHtml(mode) {
   </div>`;
 }
 function setupSig(s) {
-  if (S.page === "cleanup") return JSON.stringify([s.jobs, s.worktrees.map((w) => [w.id, w.cleanup, w.busy, w.sessions.length, w.pr?.state])]);
+  if (S.page === "cleanup") return JSON.stringify([s.jobs, s.worktrees.map((w) => [w.id, w.cleanup, w.busy, w.sessions.length, w.agents.length, w.pr?.state])]);
   return JSON.stringify([s.coderabbitLogin, s.config, s.repos, s.sessions.length, s.worktrees.length, s.onboardedAt]);
 }
 async function saveConfig(patch2) {
@@ -1094,7 +1099,7 @@ function headerHtml(wt) {
         ${wt.error.detail && wt.error.detail !== wt.error.message ? `<details><summary>Git's message</summary><code class="cmd">${esc(wt.error.detail)}</code></details>` : ""}
         ${wt.error.kind === "broken-link" ? '<div class="actions" style="margin-top:8px"><button class="btn primary" data-act="repair">Repair links</button></div>' : ""}</div>` : "";
   const removeErr = S.removeErrors[wt.id] ? `<div class="callout danger"><strong>Couldn't remove this worktree.</strong><p>${esc(S.removeErrors[wt.id])}</p></div>` : "";
-  if (cs?.kind === "idle" && !wt.sessions.length && (cs.eligible || cs.forceable)) {
+  if (cs?.kind === "idle" && !inUse(wt) && (cs.eligible || cs.forceable)) {
     cleanup = `<div class="callout small">No Claude session is using this worktree.
       ${wt.busy ? '<span class="muted"><span class="dot busy"></span> Removing…</span>' : cs.eligible ? '<button class="link-btn" data-act="remove">Remove it</button> (the branch is kept)' : `<button class="link-btn" data-act="remove-anyway">Remove anyway…</button> <span class="muted">(${esc(cs.reasons.join("; "))})</span>`}
       · <a class="link-btn" href="#/cleanup">Clean up others</a></div>`;
@@ -1112,7 +1117,7 @@ function headerHtml(wt) {
           ${cs.forceable ? `<div class="actions" style="margin-top:8px">${busy || '<button class="btn danger" data-act="remove-anyway">Remove anyway…</button><span class="muted small">The branch is kept either way.</span>'}</div>` : ""}</div>`;
   }
   return `<div class="title-row"><h1>${esc(name)}${pr}</h1>
-      <div class="actions">${prChip(wt.pr)}${wt.sessions.map(sessionChip).join("")}</div></div>
+      <div class="actions">${prChip(wt.pr)}${wt.sessions.map(sessionChip).join("")}${wt.agents.map(agentChip).join("")}</div></div>
     ${wt.pr ? `<div class="meta">${esc(wt.pr.title)}</div>` : ""}
     ${headerMetaHtml(wt)}
     ${err}${removeErr}
@@ -1307,7 +1312,7 @@ var otherViewHtml = (otherView, byCommit) => otherView.length ? `<details class=
         <button class="btn small" data-act="mode" data-mode="${byCommit ? "full" : "commits"}">Show there</button></summary>
       <div class="panel-body threads">${otherView.map((c) => `<div class="mono">${esc(c.file)}:${c.line}${c.commit ? ` · ${c.commit.slice(0, 8)}` : ""}</div>${threadHtml(c)}`).join("")}</div></details>` : "";
 var collapseAllHtml = (v) => v.diff.mode === "commits" && (v.groups ?? []).every((g) => S.shutCommits.has(g.n)) ? '<button class="btn" data-act="expand-all">Expand all</button>' : '<button class="btn" data-act="collapse-all">Collapse all</button>';
-var headerSig = (wt) => JSON.stringify([wt.sessions, wt.pr, wt.cleanup, wt.ahead, wt.dirty, wt.baseRef, wt.baseError, wt.error, wt.busy, S.removeErrors[wt.id], st().sessions.length, st().config]);
+var headerSig = (wt) => JSON.stringify([wt.sessions, wt.agents, wt.pr, wt.cleanup, wt.ahead, wt.dirty, wt.baseRef, wt.baseError, wt.error, wt.busy, S.removeErrors[wt.id], st().sessions.length, st().config]);
 function commitsHtml(commits, wt) {
   if (!commits.length && !wt.dirty) return "";
   const byCommit = S.view?.diff.mode === "commits";
@@ -1822,10 +1827,12 @@ var actions = {
   submit: async () => {
     const wt = curWt();
     if (!wt) return;
-    await api("POST", `/api/worktrees/${wt.id}/submit`, { summary: S.summaries[wt.id] || "", targetSession: S.summaries[`${wt.id}:target`] || null });
+    const target = S.summaries[`${wt.id}:target`] || null;
+    const review = await api("POST", `/api/worktrees/${wt.id}/submit`, { summary: S.summaries[wt.id] || "", targetSession: target });
     S.summaries[wt.id] = "";
     S.editors.delete("summary");
-    toast(wt.sessions.length ? "Sent. Claude gets it at the end of its current turn." : "Queued for the next Claude session that works here.");
+    const to = target ? st().sessions.filter((s) => s.sessionId === target) : wt.sessions;
+    toast(review.status === "delivered" ? `Sent to ${review.deliveredTo?.name || "Claude"}, which is starting on it now.` : !to.length ? "Queued for the next Claude session that works here." : to.some((s) => s.status === "busy") ? "Sent. Claude gets it at the end of its current turn." : `Queued. ${to.map((s) => s.name).join(", ")} ${to.length === 1 ? "is" : "are"} idle, so Claude gets it with your next message there.`);
     await reloadComments();
   },
   "cancel-review": async (el) => {

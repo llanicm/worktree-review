@@ -31,6 +31,7 @@ function commonBlockers(wt: WorktreeRecord, { ignoreBusy = false }: StatusOpts =
     else reasons.push(`${n} with uncommitted changes`);
   }
   if (wt.sessions.length) hard(`in use by ${wt.sessions.map((s) => s.name).join(', ')}`);
+  if (wt.agents.length) hard(`in use by ${wt.agents.map((a) => `a subagent of ${a.parent.name}`).join(', ')}`);
   if (openReviewItems(wt.id)) reasons.push('has unsent review comments');
   if (wt.busy && !ignoreBusy) hard('being removed right now');
   return { reasons, notes, hard, forceable: () => forceable };

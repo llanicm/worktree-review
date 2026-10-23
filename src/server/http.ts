@@ -6,6 +6,7 @@ import { HERE, PORT } from './paths.ts';
 import { clients, publicState } from './public-state.ts';
 import { routes } from './routes.ts';
 import { firstLine, log } from './util.ts';
+import { addWaiter } from './wake.ts';
 
 // ---------- HTTP ----------
 
@@ -45,6 +46,14 @@ export const server = http.createServer(async (req, res) => {
     res.write(`event: state\ndata: ${JSON.stringify(publicState())}\n\n`);
     clients.add(res);
     req.on('close', () => clients.delete(res));
+    return;
+  }
+
+  // Held open like the events stream, so a waiter that goes away is forgotten at once.
+  if (url.pathname === '/api/wait' && req.method === 'POST' && req.headers['x-wtr'] === '1') {
+    let body: unknown;
+    try { body = await readBody(req); } catch { return send(res, 400, { error: 'Invalid JSON' }); }
+    addWaiter(body, (r) => send(res, 200, r), (fn) => res.on('close', () => { if (!res.writableEnded) fn(); }));
     return;
   }
 

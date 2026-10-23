@@ -445,6 +445,7 @@ async function discoverWorktrees() {
           stats: null,
           nextCheck: 0,
           sessions: [],
+          agents: [],
           pr: void 0,
           headInMerged: null
         };
@@ -577,7 +578,7 @@ function refreshWorktree(wt, { force = false } = {}) {
   return checking;
 }
 function isActive(wt) {
-  return wt.sessions.length > 0 || Date.now() - wt.lastActivity < 2 * 36e5;
+  return wt.sessions.length > 0 || wt.agents.length > 0 || Date.now() - wt.lastActivity < 2 * 36e5;
 }
 async function pollWorktrees() {
   const now = Date.now();
@@ -630,6 +631,7 @@ function commonBlockers(wt, { ignoreBusy = false } = {}) {
     else reasons.push(`${n} with uncommitted changes`);
   }
   if (wt.sessions.length) hard(`in use by ${wt.sessions.map((s) => s.name).join(", ")}`);
+  if (wt.agents.length) hard(`in use by ${wt.agents.map((a) => `a subagent of ${a.parent.name}`).join(", ")}`);
   if (openReviewItems(wt.id)) reasons.push("has unsent review comments");
   if (wt.busy && !ignoreBusy) hard("being removed right now");
   return { reasons, notes, hard, forceable: () => forceable };
@@ -966,6 +968,62 @@ function parseSessionInfo(v) {
     cwd: typeof v.cwd === "string" ? v.cwd : void 0
   };
 }
+function parseAgentMeta(v) {
+  if (!isRecord(v)) return null;
+  return {
+    agentType: typeof v.agentType === "string" ? v.agentType : "agent",
+    description: typeof v.description === "string" ? v.description : "",
+    worktreePath: typeof v.worktreePath === "string" ? v.worktreePath : void 0,
+    finished: v.finished === true
+  };
+}
+var AGENT_STALE_MS = 30 * 6e4;
+var discovering = null;
+var discoverSoon = () => {
+  discovering ??= discoverWorktrees().catch(() => {
+  }).finally(() => {
+    discovering = null;
+  });
+};
+function refreshAgents(s, transcript, paths, ownPath) {
+  const dir = path5.join(path5.dirname(transcript), s.sessionId, "subagents");
+  let files = [];
+  try {
+    files = fs8.readdirSync(dir).filter((f) => f.endsWith(".meta.json"));
+  } catch {
+    return [];
+  }
+  const result = [];
+  for (const f of files) {
+    const meta = parseAgentMeta(loadJson(path5.join(dir, f), null));
+    if (!meta || meta.finished) continue;
+    const agentId = f.slice(0, -".meta.json".length).replace(/^agent-/, "");
+    const tp = path5.join(dir, f.slice(0, -".meta.json".length) + ".jsonl");
+    let size, mtime;
+    try {
+      ({ size, mtimeMs: mtime } = fs8.statSync(tp));
+    } catch {
+      continue;
+    }
+    if (Date.now() - mtime > AGENT_STALE_MS) continue;
+    const a = s.agents.find((x) => x.agentId === agentId) ?? { agentId, description: meta.description, agentType: meta.agentType, worktreePaths: [], scannedSize: -1, scannedAt: 0 };
+    if (meta.worktreePath) {
+      a.worktreePaths = paths.filter((p) => p === meta.worktreePath);
+      if (!a.worktreePaths.length) discoverSoon();
+    } else if (size !== a.scannedSize && Date.now() - a.scannedAt > 8e3) {
+      a.scannedSize = size;
+      a.scannedAt = Date.now();
+      try {
+        a.worktreePaths = linkSession(readTail(tp, 3 * 1024 * 1024), paths).filter((p) => p !== ownPath);
+      } catch {
+        a.scannedSize = -1;
+      }
+    }
+    result.push(a);
+  }
+  return result;
+}
+var ownWorktree = (cwd, paths) => cwd ? paths.filter((p) => cwd === p || cwd.startsWith(p + "/")).sort((a, b) => b.length - a.length)[0] : void 0;
 function refreshSessions() {
   const dir = path5.join(CLAUDE_DIR, "sessions");
   const live = /* @__PURE__ */ new Set();
@@ -981,10 +1039,11 @@ function refreshSessions() {
     live.add(info.sessionId);
     let s = sessions.get(info.sessionId);
     if (!s) {
-      s = { sessionId: info.sessionId, worktreePaths: [], scannedSize: -1, scannedAt: 0, pid: info.pid, name: "", status: "unknown" };
+      s = { sessionId: info.sessionId, worktreePaths: [], scannedSize: -1, scannedAt: 0, pid: info.pid, name: "", status: "unknown", agents: [] };
       sessions.set(info.sessionId, s);
     }
     Object.assign(s, { pid: info.pid, name: info.name || info.sessionId.slice(0, 8), status: info.status || "unknown", cwd: info.cwd });
+    const own = ownWorktree(s.cwd, paths);
     const tp = findTranscript(s.sessionId);
     if (tp) {
       try {
@@ -996,22 +1055,21 @@ function refreshSessions() {
         }
       } catch {
       }
+      s.agents = refreshAgents(s, tp, paths, own);
     }
-    const cwd = s.cwd;
-    if (cwd) {
-      const own = paths.filter((p) => cwd === p || cwd.startsWith(p + "/")).sort((a, b) => b.length - a.length)[0];
-      if (own && !s.worktreePaths.includes(own)) s.worktreePaths.unshift(own);
-    }
+    if (own && !s.worktreePaths.includes(own)) s.worktreePaths.unshift(own);
   }
   for (const id of sessions.keys()) if (!live.has(id)) sessions.delete(id);
   for (const wt of wts.values()) {
     const linked = [...sessions.values()].filter((s) => s.worktreePaths.includes(wt.path));
-    const sig = linked.map((s) => s.sessionId + s.status).join(",");
+    const agents = [...sessions.values()].flatMap((s) => s.agents.filter((a) => a.worktreePaths.includes(wt.path)).map((a) => ({ agentId: a.agentId, description: a.description, agentType: a.agentType, parent: { sessionId: s.sessionId, name: s.name, status: s.status } })));
+    const sig = linked.map((s) => s.sessionId + s.status).concat(agents.map((a) => a.agentId + a.parent.status)).join(",");
     if (sig !== wt.sessionSig) {
       wt.sessionSig = sig;
       changed();
     }
     wt.sessions = linked;
+    wt.agents = agents;
   }
 }
 
@@ -1225,6 +1283,7 @@ function publicWorktree(wt) {
     baseError: wt.baseError,
     pr: wt.pr ? { number: wt.pr.number, state: wt.pr.state, isDraft: wt.pr.isDraft, url: wt.pr.url, title: wt.pr.title, mergedAt: wt.pr.mergedAt } : null,
     sessions: wt.sessions.map((x) => ({ sessionId: x.sessionId, name: x.name, status: x.status })),
+    agents: wt.agents,
     cleanup: cleanupStatus(wt),
     error: wt.error || null,
     busy: wt.busy || null,
@@ -2020,6 +2079,47 @@ function listDir(p, showHidden) {
   };
 }
 
+// src/server/wake.ts
+var waiters = /* @__PURE__ */ new Map();
+var POLL_MS = 5e4;
+function addWaiter(body, reply, onClose) {
+  const sessionId = isRecord(body) && typeof body.session_id === "string" ? body.session_id : "";
+  const cwd = isRecord(body) && typeof body.cwd === "string" ? body.cwd : void 0;
+  if (!sessionId) return reply({ text: null, done: true });
+  waiters.get(sessionId)?.reply({ text: null, done: true });
+  let finished = false;
+  const w = {
+    cwd,
+    reply: (r) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      if (waiters.get(sessionId) === w) waiters.delete(sessionId);
+      reply(r);
+    }
+  };
+  const timer = setTimeout(() => w.reply({ text: null, done: false }), POLL_MS);
+  waiters.set(sessionId, w);
+  onClose(() => {
+    finished = true;
+    clearTimeout(timer);
+    if (waiters.get(sessionId) === w) waiters.delete(sessionId);
+  });
+  offerReviews();
+}
+function offerReviews() {
+  for (const [id, w] of waiters) {
+    const s = sessions.get(id);
+    if (!s) {
+      w.reply({ text: null, done: true });
+      continue;
+    }
+    if (s.status !== "idle") continue;
+    const text = claimReviews({ session_id: id, cwd: w.cwd });
+    if (text) w.reply({ text, done: true });
+  }
+}
+
 // src/server/routes.ts
 var bodyOf = (raw) => raw;
 var arg = (m, i = 1) => m[i];
@@ -2072,7 +2172,11 @@ var routes = [
     save();
     return { ok: true };
   }],
-  ["POST", /^\/api\/worktrees\/(\w+)\/submit$/, (m, raw) => submitReview(getWt(arg(m)), bodyOf(raw))],
+  ["POST", /^\/api\/worktrees\/(\w+)\/submit$/, (m, raw) => {
+    const review = submitReview(getWt(arg(m)), bodyOf(raw));
+    offerReviews();
+    return review;
+  }],
   ["POST", /^\/api\/worktrees\/(\w+)\/remove$/, (m, raw) => {
     const body = bodyOf(raw);
     const wt = getWt(arg(m));
@@ -2308,6 +2412,18 @@ data: ${JSON.stringify(publicState())}
     req.on("close", () => clients.delete(res));
     return;
   }
+  if (url.pathname === "/api/wait" && req.method === "POST" && req.headers["x-wtr"] === "1") {
+    let body;
+    try {
+      body = await readBody(req);
+    } catch {
+      return send(res, 400, { error: "Invalid JSON" });
+    }
+    addWaiter(body, (r) => send(res, 200, r), (fn) => res.on("close", () => {
+      if (!res.writableEnded) fn();
+    }));
+    return;
+  }
   if (url.pathname.startsWith("/api/")) {
     if (req.method !== "GET" && req.headers["x-wtr"] !== "1") return send(res, 403, { error: "Missing x-wtr header" });
     let match = null;
@@ -2359,7 +2475,10 @@ server.listen(PORT, "127.0.0.1", async () => {
   getIntegrations().then(changed, () => {
   });
   void loop(discoverWorktrees, 3e4);
-  void loop(async () => refreshSessions(), 3e3);
+  void loop(async () => {
+    refreshSessions();
+    offerReviews();
+  }, 3e3);
   void loop(pollWorktrees, 1e3);
   setTimeout(() => void loop(refreshPRs, () => config.prPollMinutes * 6e4), 5e3);
 });

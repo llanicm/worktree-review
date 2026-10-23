@@ -30,6 +30,7 @@ function publicWorktree(wt: WorktreeRecord): Worktree {
     ahead: wt.ahead, stats: wt.stats, baseRef: wt.baseRef, baseSource: wt.baseSource, baseError: wt.baseError,
     pr: wt.pr ? { number: wt.pr.number, state: wt.pr.state, isDraft: wt.pr.isDraft, url: wt.pr.url, title: wt.pr.title, mergedAt: wt.pr.mergedAt } : null,
     sessions: wt.sessions.map((x) => ({ sessionId: x.sessionId, name: x.name, status: x.status })),
+    agents: wt.agents,
     cleanup: cleanupStatus(wt),
     error: wt.error || null,
     busy: wt.busy || null,

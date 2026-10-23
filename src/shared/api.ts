@@ -52,6 +52,15 @@ export interface Session extends SessionRef {
   cwd?: string;
 }
 
+/** A subagent a session started that is still running. */
+export interface AgentRef {
+  agentId: string;
+  description: string;
+  agentType: string;
+  /** The session that started it, which may be working somewhere else. */
+  parent: SessionRef;
+}
+
 export type WorktreeErrorKind = 'broken-link' | 'submodules' | 'dirty' | 'locked' | 'other';
 
 export interface WorktreeError {
@@ -132,6 +141,8 @@ export interface Worktree {
   baseError: string | null | undefined;
   pr: PullRequest | null;
   sessions: SessionRef[];
+  /** Subagents working here, e.g. one started with `isolation: "worktree"`. */
+  agents: AgentRef[];
   cleanup: CleanupStatus | null;
   error: WorktreeError | null;
   /** What's happening to it right now, e.g. "cleanup" or "remove". */
@@ -498,6 +509,12 @@ export interface ShutdownResponse {
 /** POST /api/hook: the review text to hand to Claude, or null when there is none. */
 export interface HookResponse {
   text: string | null;
+}
+
+/** POST /api/wait: a review for an idle session's waiter, or `done` when it should stop waiting. */
+export interface WaitResponse {
+  text: string | null;
+  done: boolean;
 }
 
 /** GET /api/worktrees/:id/bases: the choices in the "Compare with" menu. */

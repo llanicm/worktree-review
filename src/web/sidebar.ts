@@ -1,11 +1,14 @@
 // ---------- sidebar ----------
-import type { PullRequest, Session, SessionRef, Worktree } from '../shared/api.ts';
+import type { AgentRef, PullRequest, Session, SessionRef, Worktree } from '../shared/api.ts';
 import { NAMES, REVIEWERS } from './code-review.ts';
 import { renderJobs } from './jobs.ts';
 import { need, S, st } from './state.ts';
 import { ago, esc, md, shortPath } from './util.ts';
 
 export type Groups = Record<'working' | 'merged' | 'recent' | 'older', Worktree[]>;
+
+/** Whether a Claude session or a subagent is working in it. */
+export const inUse = (wt: Worktree) => wt.sessions.length > 0 || wt.agents.length > 0;
 
 /** The worktree to open when none is chosen: the one most likely to need a review now. */
 export function defaultWorktree(list: Worktree[]): Worktree | undefined {
@@ -17,7 +20,7 @@ export function grouped(list: Worktree[]): Groups {
   const recentMs = st().config.recentDays * 864e5;
   const g: Groups = { working: [], merged: [], recent: [], older: [] };
   for (const wt of list) {
-    if (wt.sessions.length) g.working.push(wt);
+    if (inUse(wt)) g.working.push(wt);
     else if (wt.pr?.state === 'MERGED') g.merged.push(wt);
     else if (Date.now() - wt.lastActivity < recentMs) g.recent.push(wt);
     else g.older.push(wt);
@@ -35,6 +38,12 @@ export function prChip(pr: PullRequest | null) {
 
 export function sessionChip(s: SessionRef | Session) {
   return `<span class="chip" title="Claude session ${esc(s.name)} is ${esc(s.status)}"><span class="dot ${esc(s.status)}"></span>${esc(s.name)}</span>`;
+}
+
+/** A subagent, named after the session that started it. */
+export function agentChip(a: AgentRef) {
+  const what = a.description || a.agentType;
+  return `<span class="chip agent" title="${esc(a.agentType)} subagent started by Claude session ${esc(a.parent.name)} (${esc(a.parent.status)})${a.description ? `: ${esc(a.description)}` : ''}"><span class="dot busy"></span><span class="agent-parent">${esc(a.parent.name)}</span><span class="agent-sep">›</span><span class="agent-what">${esc(what)}</span></span>`;
 }
 
 function reviewChip(wt: Worktree) {
@@ -59,7 +68,7 @@ function wtItem(wt: Worktree, showNew?: boolean) {
       <span class="wt-path">${esc(shortPath(wt.path))}</span><span>· ${ago(wt.lastActivity)}</span>
     </div>
     <div class="wt-sub">
-      ${wt.sessions.map(sessionChip).join('')}${prChip(wt.pr)}
+      ${wt.sessions.map(sessionChip).join('')}${wt.agents.map(agentChip).join('')}${prChip(wt.pr)}
       ${nComments ? `<span class="chip comments">${nComments} comment${nComments === 1 ? '' : 's'}</span>` : ''}
       ${wt.busy ? '<span class="chip busy-chip"><span class="dot busy"></span>removing…</span>' : ''}
       ${wt.error ? `<span class="chip closed" title="${esc(wt.error.message)}">${wt.error.kind === 'broken-link' ? 'broken link' : "can't read"}</span>`
@@ -79,7 +88,7 @@ export function renderSidebar() {
   const list = S.st.worktrees.filter((w) => !f || (w.branch || '').toLowerCase().includes(f) || w.path.toLowerCase().includes(f));
   const g = grouped(list);
   const safe = g.merged.filter((w) => w.cleanup?.kind === 'merged' && w.cleanup.eligible).length;
-  const idle = S.st.worktrees.filter((w) => w.cleanup && !w.sessions.length).length;
+  const idle = S.st.worktrees.filter((w) => w.cleanup && !inUse(w)).length;
   const parts: string[] = [];
   const section = (title: string, items: Worktree[], opts: SectionOpts = {}) => {
     if (!items.length && !opts.always) return;
@@ -126,6 +135,6 @@ export function renderSidebar() {
   renderJobs();
 
   const recentMs = S.st.config.recentDays * 864e5;
-  const n = S.st.worktrees.filter((w) => w.review.needsReview && (w.sessions.length || Date.now() - w.lastActivity < recentMs)).length;
+  const n = S.st.worktrees.filter((w) => w.review.needsReview && (inUse(w) || Date.now() - w.lastActivity < recentMs)).length;
   document.title = n ? `(${n}) Worktree Review` : 'Worktree Review';
 }
