@@ -28,7 +28,7 @@ function publicWorktree(wt: WorktreeRecord): Worktree {
     isMain: wt.isMain, locked: wt.locked, detached: wt.detached,
     fingerprint: wt.fingerprint, dirty: wt.dirty, lastActivity: wt.lastActivity,
     ahead: wt.ahead, stats: wt.stats, baseRef: wt.baseRef, baseSource: wt.baseSource, baseError: wt.baseError,
-    pr: wt.pr ? { number: wt.pr.number, state: wt.pr.state, isDraft: wt.pr.isDraft, url: wt.pr.url, title: wt.pr.title, mergedAt: wt.pr.mergedAt } : null,
+    pr: wt.pr ? { number: wt.pr.number, state: wt.pr.state, isDraft: wt.pr.isDraft, url: wt.pr.url, title: wt.pr.title, mergedAt: wt.pr.mergedAt, baseRefName: wt.pr.baseRefName } : null,
     sessions: wt.sessions.map((x) => ({ sessionId: x.sessionId, name: x.name, status: x.status })),
     agents: wt.agents,
     cleanup: cleanupStatus(wt),

@@ -72,7 +72,8 @@ test('state lists the demo worktrees, sessions and PRs', async () => {
   assert.deepEqual(Object.keys(by).sort(), ['chore/upgrade-node', 'feat/checkout-discounts', 'feat/search-filters', 'fix/tax-rounding', 'main', 'refactor/api-client', 'spike/graphql-gateway']);
   assert.ok(by.main.isMain);
   assert.deepEqual(by['feat/checkout-discounts'].sessions.map((s: Json) => s.name), ['shop-checkout']);
-  assert.deepEqual(by['feat/search-filters'].sessions.map((s: Json) => s.name), ['shop-search']);
+  assert.deepEqual(by['feat/search-filters'].sessions.map((s: Json) => s.name).sort(), ['shop-main', 'shop-search'], 'a session that went in with cd works there');
+  assert.deepEqual(by['refactor/api-client'].sessions, [], 'only reading or mentioning a worktree is not working in it');
   // A running subagent counts as working where it works, under the session that started it; a finished one doesn't.
   assert.deepEqual(by['fix/tax-rounding'].sessions, []);
   assert.deepEqual(by['fix/tax-rounding'].agents.map((a: Json) => [a.parent.name, a.description, a.agentType]), [['shop-main', 'Round tax per line item', 'general-purpose']]);

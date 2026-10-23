@@ -938,25 +938,43 @@ function readTail(p, bytes) {
     fs8.closeSync(fd);
   }
 }
+var EDIT_TOOLS = /* @__PURE__ */ new Set(["Edit", "MultiEdit", "Write", "NotebookEdit"]);
+var GIT_CHANGES = /^(add|am|apply|checkout|cherry-pick|commit|merge|mv|pull|push|rebase|reset|restore|revert|rm|stash|switch)$/;
+var ARG = String.raw`("[^"]+"|'[^']+'|[^\s;&|)]+)`;
+var CD = new RegExp(String.raw`(?:^|[;&|(]\s*)cd\s+${ARG}`, "g");
+var GIT_C = new RegExp(String.raw`\bgit\s+-C\s+${ARG}\s+([a-z-]+)`, "g");
+var unquote = (a) => a.replace(/^(["'])(.*)\1$/, "$2").replace(/^~(?=\/|$)/, HOME);
+function shellTargets(cmd) {
+  const dirs = [...cmd.matchAll(CD)].map((m) => unquote(m[1] ?? ""));
+  for (const m of cmd.matchAll(GIT_C)) if (GIT_CHANGES.test(m[2] ?? "")) dirs.push(unquote(m[1] ?? ""));
+  return dirs.filter((d) => d.startsWith("/"));
+}
+var worktreeOf = (p, paths) => p ? paths.filter((w) => p === w || p.startsWith(w + "/")).sort((a, b) => b.length - a.length)[0] : void 0;
 function linkSession(text, paths) {
-  const result = [];
-  for (const p of paths) {
-    const nested = paths.filter((q) => q.length > p.length && q.startsWith(p + "/"));
-    let count = 0, last = -1, cwdHit = false;
-    let i = text.indexOf(p);
-    while (i !== -1) {
-      const ch = text[i + p.length];
-      const boundary = ch === void 0 || /[/"'\s\\`:),]/.test(ch);
-      if (boundary && !nested.some((q) => text.startsWith(q, i))) {
-        count++;
-        last = i;
-        if (text.startsWith('"cwd":"', i - 7)) cwdHit = true;
-      }
-      i = text.indexOf(p, i + p.length);
+  const last = /* @__PURE__ */ new Map();
+  text.split("\n").forEach((line, i) => {
+    let entry;
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      return;
     }
-    if (cwdHit || count >= 6) result.push({ path: p, last });
-  }
-  return result.sort((a, b) => b.last - a.last).map((r) => r.path);
+    const hit = (p) => {
+      const w = worktreeOf(p, paths);
+      if (w) last.set(w, i);
+    };
+    const e = rec(entry);
+    hit(asStr(e.cwd));
+    const content = rec(e.message).content;
+    if (!Array.isArray(content)) return;
+    for (const c of content.map(rec)) {
+      if (c.type !== "tool_use") continue;
+      const input = rec(c.input);
+      if (typeof c.name === "string" && EDIT_TOOLS.has(c.name)) hit(asStr(input.file_path) ?? asStr(input.notebook_path));
+      else if (c.name === "Bash") for (const d of shellTargets(asStr(input.command) ?? "")) hit(d);
+    }
+  });
+  return [...last].sort((a, b) => b[1] - a[1]).map(([p]) => p);
 }
 function parseSessionInfo(v) {
   if (!isRecord(v) || typeof v.sessionId !== "string" || !v.sessionId || typeof v.pid !== "number" || !v.pid) return null;
@@ -1023,7 +1041,6 @@ function refreshAgents(s, transcript, paths, ownPath) {
   }
   return result;
 }
-var ownWorktree = (cwd, paths) => cwd ? paths.filter((p) => cwd === p || cwd.startsWith(p + "/")).sort((a, b) => b.length - a.length)[0] : void 0;
 function refreshSessions() {
   const dir = path5.join(CLAUDE_DIR, "sessions");
   const live = /* @__PURE__ */ new Set();
@@ -1043,7 +1060,7 @@ function refreshSessions() {
       sessions.set(info.sessionId, s);
     }
     Object.assign(s, { pid: info.pid, name: info.name || info.sessionId.slice(0, 8), status: info.status || "unknown", cwd: info.cwd });
-    const own = ownWorktree(s.cwd, paths);
+    const own = worktreeOf(s.cwd, paths);
     const tp = findTranscript(s.sessionId);
     if (tp) {
       try {
@@ -1199,7 +1216,7 @@ function prNode(v) {
 async function refreshPRs() {
   for (const repo of repos.values()) {
     if (!repo.gh) continue;
-    const repoWts = [...wts.values()].filter((w) => w.repoKey === repo.commonDir && w.branch && !w.isMain);
+    const repoWts = [...wts.values()].filter((w) => w.repoKey === repo.commonDir && w.branch);
     const branches = [...new Set(repoWts.flatMap((w) => w.branch ? [w.branch] : []))];
     if (!branches.length) continue;
     const fields = "nodes { number state isDraft url title headRefOid mergedAt baseRefName }";
@@ -1211,7 +1228,8 @@ async function refreshPRs() {
       if (!isRecord(data)) throw new Error("Unexpected reply from gh");
       const byBranch = new Map(branches.map((b, i) => [b, prNode(data[`b${i}`])]));
       for (const wt of repoWts) {
-        const pr = wt.branch === null ? null : byBranch.get(wt.branch) ?? null;
+        const found = wt.branch === null ? null : byBranch.get(wt.branch) ?? null;
+        const pr = found && found.baseRefName !== wt.branch ? found : null;
         if (JSON.stringify(pr) !== JSON.stringify(wt.pr)) {
           wt.pr = pr;
           wt.headInMerged = null;
@@ -1281,7 +1299,7 @@ function publicWorktree(wt) {
     baseRef: wt.baseRef,
     baseSource: wt.baseSource,
     baseError: wt.baseError,
-    pr: wt.pr ? { number: wt.pr.number, state: wt.pr.state, isDraft: wt.pr.isDraft, url: wt.pr.url, title: wt.pr.title, mergedAt: wt.pr.mergedAt } : null,
+    pr: wt.pr ? { number: wt.pr.number, state: wt.pr.state, isDraft: wt.pr.isDraft, url: wt.pr.url, title: wt.pr.title, mergedAt: wt.pr.mergedAt, baseRefName: wt.pr.baseRefName } : null,
     sessions: wt.sessions.map((x) => ({ sessionId: x.sessionId, name: x.name, status: x.status })),
     agents: wt.agents,
     cleanup: cleanupStatus(wt),
