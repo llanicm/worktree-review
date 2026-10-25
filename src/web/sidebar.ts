@@ -46,11 +46,14 @@ export function agentChip(a: AgentRef) {
   return `<span class="chip agent" title="${esc(a.agentType)} subagent started by Claude session ${esc(a.parent.name)} (${esc(a.parent.status)})${a.description ? `: ${esc(a.description)}` : ''}"><span class="dot busy"></span><span class="agent-parent">${esc(a.parent.name)}</span><span class="agent-sep">›</span><span class="agent-what">${esc(what)}</span></span>`;
 }
 
-function reviewChip(wt: Worktree) {
-  const running = REVIEWERS.filter((k) => wt.codeReviews[k]?.status === 'running');
-  if (running.length) return `<span class="chip cr"><span class="dot busy"></span>${running.map((k) => NAMES[k]).join(', ')}</span>`;
-  const open = REVIEWERS.reduce((n, k) => n + (wt.codeReviews[k]?.open || 0), 0);
-  return open ? `<span class="chip cr">${open} finding${open === 1 ? '' : 's'}</span>` : '';
+/** A chip per reviewer, in its colour: reviewing now, or how many of its findings are still open. */
+function reviewChips(wt: Worktree) {
+  return REVIEWERS.map((k) => {
+    const r = wt.codeReviews[k];
+    if (r?.status === 'running') return `<span class="chip reviewer ${k}"><span class="dot busy"></span>${NAMES[k]} reviewing</span>`;
+    if (!r?.open) return '';
+    return `<span class="chip reviewer ${k}" title="${r.open} open ${NAMES[k]} finding${r.open === 1 ? '' : 's'}${r.worst && r.worst !== 'none' ? `; the most serious is ${r.worst}` : ''}">${NAMES[k]} · ${r.open}</span>`;
+  }).join('');
 }
 
 function wtItem(wt: Worktree, showNew?: boolean) {
@@ -75,7 +78,7 @@ function wtItem(wt: Worktree, showNew?: boolean) {
         : wt.dirtyKind === 'lockfile-only' ? '<span class="chip" title="Only a lockfile changed">lockfile changed</span>'
         : wt.dirtyKind === 'deleted-only' ? `<span class="chip" title="Tracked files missing from disk; nothing is lost">${wt.dirty} missing</span>`
         : wt.dirty ? `<span class="chip" title="Uncommitted changes">${wt.dirty} uncommitted</span>` : ''}
-      ${reviewChip(wt)}
+      ${reviewChips(wt)}
     </div>
   </a>`;
 }
