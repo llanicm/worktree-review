@@ -430,10 +430,13 @@ table.kv td:first-child { color: var(--fg-muted); white-space: nowrap; }
 .verdict strong { color: var(--fg); font-family: var(--mono); font-size: 12px; }
 
 /* ---------- code reviews (CodeRabbit or Claude) ----------
-   Colour says how things stand, never which reviewer it was (its name says that): amber while a review runs, as for
-   any busy dot, and red / amber / grey for how serious a finding is, the same on its tag, its edge and the sidebar chip. */
-.chip.findings.critical, .chip.findings.major { color: var(--red); border-color: currentColor; }
-.chip.findings.minor { color: var(--amber); border-color: currentColor; }
+   Each reviewer has one colour, used for everything of its own: CodeRabbit orange, Claude purple. --rv is that colour
+   wherever the reviewer's class is set. How serious a finding is shows only on its severity tag, in red / amber / grey. */
+:root { --rabbit: #e8590c; --rabbit-soft: #fff4e6; --reviewer-claude: #8250df; --reviewer-claude-soft: #fbefff; }
+@media (prefers-color-scheme: dark) { :root { --rabbit: #ff8c42; --rabbit-soft: #2b1d12; --reviewer-claude: #ab7df8; --reviewer-claude-soft: #231a33; } }
+.coderabbit { --rv: var(--rabbit); --rv-soft: var(--rabbit-soft); }
+.claude { --rv: var(--reviewer-claude); --rv-soft: var(--reviewer-claude-soft); }
+.chip.reviewer { color: var(--rv); border-color: currentColor; }
 .review-run { position: relative; display: inline-flex; }
 .review-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; width: 320px; max-width: calc(100vw - 32px); display: grid; gap: 10px;
   padding: 12px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow); font-size: 13px; }
@@ -443,14 +446,15 @@ table.kv td:first-child { color: var(--fg-muted); white-space: nowrap; }
 .review-menu .setting { margin: 0; }
 .review-menu p { margin: 0; }
 .review-menu .actions { justify-content: flex-end; }
-.cr-running { display: inline-flex; gap: 6px; align-items: center; padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px;
-  font-size: 13px; color: var(--fg); text-decoration: none; white-space: nowrap; }
-.cr-running:hover { background: var(--bg-soft); }
+.cr-running { display: inline-flex; gap: 6px; align-items: center; padding: 4px 10px; border: 1px solid currentColor; border-radius: 999px;
+  font-size: 13px; color: var(--rv); text-decoration: none; white-space: nowrap; }
+.cr-running:hover { background: var(--rv-soft); }
 .cr-elapsed { font-family: var(--mono); font-size: 12px; }
 .cr-list { max-width: none; padding: 0; }
-.cr-finding { border-left: 3px solid var(--border); }
-.cr-finding.sev-critical, .cr-finding.sev-major { border-left-color: var(--red); }
-.cr-finding.sev-minor { border-left-color: var(--amber); }
+.cr-finding { border-left: 3px solid var(--rv); }
+.cr-name { color: var(--rv) !important; }
+.cr-panel { border-color: var(--rv); }
+.cr-panel > .panel-head { background: var(--rv-soft); border-bottom-color: var(--rv); }
 .cr-finding.dismissed, .cr-finding.sent { opacity: .6; }
 .cr-title { font-weight: 600; margin: 2px 0 4px; }
 .cr-finding details { margin-top: 6px; font-size: 12px; }
@@ -464,14 +468,12 @@ pre.suggestion { background: var(--bg-sunk); border: 1px solid var(--border-soft
 .callout.small { font-size: 12px; padding: 6px 10px; }
 
 /* The panel lists findings as links; each one is read in place in the diff. */
-.cr-panel { --rv: var(--amber); --rv-soft: var(--bg-soft); }
-.cr-panel.running { border-color: var(--amber); }
 .cr-panel .panel-body:empty { display: none; }
 .cr-index, .cr-index ul, .cr-done ul { list-style: none; margin: 0; padding: 0; }
 .cr-index { display: grid; gap: 6px; font-size: 13px; }
 .cr-index > li + li { border-top: 1px solid var(--border-soft); padding-top: 6px; }
 .cr-file { color: var(--fg); font-size: 12px; font-weight: 600; text-decoration: none; }
-.cr-file:hover { color: var(--accent); }
+.cr-file:hover { color: var(--rv); }
 .cr-item { display: flex; align-items: baseline; gap: 8px; padding: 2px 6px; margin: 1px -6px; border-radius: 6px; color: var(--fg); text-decoration: none; min-width: 0; }
 .cr-item:hover { background: var(--rv-soft); }
 .cr-item .sev { flex: none; }

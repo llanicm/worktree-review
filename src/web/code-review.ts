@@ -5,7 +5,7 @@ import { api, st, S, view } from './state.ts';
 import type { View } from './types.ts';
 import { ago, elapsed, esc, md } from './util.ts';
 
-export const SEV_ORDER = ['critical', 'major', 'minor', 'trivial', 'info', 'none'];
+const SEV_ORDER = ['critical', 'major', 'minor', 'trivial', 'info', 'none'];
 export const REVIEWERS: Reviewer[] = ['coderabbit', 'claude'];
 export const NAMES: Record<Reviewer, string> = { coderabbit: 'CodeRabbit', claude: 'Claude' };
 const EFFORTS: [ReviewEffort, string][] = [['low', 'Low (quickest)'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high'], ['max', 'Max (most thorough)']];
@@ -69,7 +69,7 @@ export function findingHtml(f: Finding, inline = false) {
   const detail = [f.comment && f.comment !== f.title ? `<div class="msg-body">${md(f.comment)}</div>` : '',
     f.suggestions ? `<details><summary>Suggested change</summary><pre class="suggestion">${esc(f.suggestions)}</pre></details>` : '',
     f.codegen && f.codegen !== f.comment ? `<details><summary>Fix guidance for agents</summary><div class="msg-body">${md(f.codegen)}</div></details>` : ''].join('');
-  return `<div class="thread cr-finding ${f.source} ${f.status} sev-${esc(f.severity)}"${inline ? ` id="fd-${esc(f.id)}"` : ''}>
+  return `<div class="thread cr-finding ${f.source} ${f.status}"${inline ? ` id="fd-${esc(f.id)}"` : ''}>
     <div class="msg"><div class="msg-head"><strong class="cr-name">${NAMES[f.source]}</strong><span class="sev ${esc(f.severity)}">${esc(f.severity)}</span>
       ${!inline && loc ? `<a href="#" class="mono" data-act="cr-jump" data-file="${esc(f.file)}" data-line="${f.endLine || f.startLine || ''}">${esc(loc)}</a>` : ''}</div>
       ${f.title ? `<div class="cr-title">${md(f.title)}</div>` : ''}
