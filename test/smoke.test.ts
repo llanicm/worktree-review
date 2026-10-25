@@ -236,6 +236,26 @@ test("an idle session's waiter wakes it with a review sent to it", async () => {
   assert.match(woken.json.text, /Say what the shop sells/);
   assert.equal((await post('/api/hook', { session_id: main, cwd: wt.path })).text, null, 'delivered once');
 
+  // Claude Code says "shell" for a session that's idle with a background shell open: that's idle too.
+  const sessionsDir = path.join(DEMO, 'home', '.claude', 'sessions');
+  const file = path.join(sessionsDir, fs.readdirSync(sessionsDir).find((n) => fs.readFileSync(path.join(sessionsDir, n), 'utf8').includes(main))!);
+  const before = fs.readFileSync(file, 'utf8');
+  const status = (to: string) => fs.writeFileSync(file, JSON.stringify({ ...JSON.parse(before), status: to }));
+  const shows = (want: string) => until(async () => (await state()).sessions.some((s: Json) => s.sessionId === main && s.status === want), `shop-main shown ${want}`);
+  try {
+    status('busy');
+    await shows('busy');
+    status('shell');
+    await shows('idle');
+    const again = wait(main);
+    await sleep(200);
+    await post('/api/comments', { wtId: wt.id, file: 'README.md', side: 'new', line: 1, lineText: 'x', body: 'Add a contact page' });
+    assert.equal((await post(`/api/worktrees/${wt.id}/submit`, { targetSession: main })).status, 'delivered', 'a shell session is woken');
+    assert.match((await again).json.text, /Add a contact page/);
+  } finally {
+    fs.writeFileSync(file, before);
+  }
+
   // A busy session's waiter leaves its reviews for the Stop hook.
   const search = await wtBy('feat/search-filters');
   const busy = '22222222-bbbb-4bbb-8bbb-222222222222';

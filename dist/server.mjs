@@ -1002,7 +1002,9 @@ function parseSessionInfo(v) {
     sessionId: v.sessionId,
     pid: v.pid,
     name: typeof v.name === "string" ? v.name : void 0,
-    status: typeof v.status === "string" ? v.status : void 0,
+    // Claude Code says "shell" for a session that's idle with something open, such as a background shell, and treats it
+    // as idle itself. So does this: it can be woken with a review, and shows as idle.
+    status: v.status === "shell" ? "idle" : typeof v.status === "string" ? v.status : void 0,
     cwd: typeof v.cwd === "string" ? v.cwd : void 0
   };
 }

@@ -42,7 +42,7 @@ export interface PullRequest {
   baseRefName: string;
 }
 
-export type SessionStatus = 'busy' | 'idle' | 'shell' | 'unknown' | (string & {});
+export type SessionStatus = 'busy' | 'idle' | 'waiting' | 'unknown' | (string & {});
 
 export interface SessionRef {
   sessionId: string;
