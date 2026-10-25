@@ -1289,20 +1289,24 @@ async function runCleanup() {
 }
 
 // src/server/public-state.ts
+var SEVERITIES = ["critical", "major", "minor", "trivial", "info"];
 function publicWorktree(wt) {
   const s = state.worktrees[wt.id] ?? {};
   const mine = state.comments.filter((c) => c.wtId === wt.id);
   const codeReviews = {};
   for (const [k, r] of Object.entries(state.codeReviews[wt.id] ?? {})) {
+    const open = r.findings.filter((f) => f.status === "open");
+    const worst = SEVERITIES.find((sev) => open.some((f) => f.severity === sev)) ?? (open.length ? "none" : null);
     const stale = r.status !== "running" && !!r.contentTree && !!wt.contentTree && r.contentTree !== wt.contentTree;
     codeReviews[k] = {
       status: r.status,
       startedAt: r.startedAt,
       finishedAt: r.finishedAt,
       heartbeatAt: r.heartbeatAt,
-      open: r.findings.filter((f) => f.status === "open").length,
+      open: open.length,
       total: r.findings.length,
       stale,
+      worst,
       sig: sha1(r.status + (r.message || "") + stale + r.findings.map((f) => f.id + f.status).join()).slice(0, 10)
     };
   }
@@ -1561,7 +1565,7 @@ ${f.codegen}`);
 }
 
 // src/server/claude-review.ts
-var SEVERITIES = ["critical", "major", "minor", "info"];
+var SEVERITIES2 = ["critical", "major", "minor", "info"];
 var SCHEMA = {
   type: "object",
   properties: {
@@ -1573,7 +1577,7 @@ var SCHEMA = {
           file: { type: "string" },
           startLine: { type: "integer" },
           endLine: { type: "integer" },
-          severity: { type: "string", enum: SEVERITIES },
+          severity: { type: "string", enum: SEVERITIES2 },
           title: { type: "string" },
           comment: { type: "string" },
           suggestion: { type: "string", description: "Replacement code, when there is an obvious fix" }
@@ -1591,7 +1595,7 @@ function activity(wt, name, input) {
   const file = asStr(input.file_path);
   if (name === "Skill") return "Starting the review";
   if (name === "Read" && file) return `Reading ${path8.relative(wt.path, path8.resolve(wt.path, file))}`;
-  if (name === "Bash") return `Running ${(asStr(input.command) || "").split("\n")[0]?.slice(0, 80)}`;
+  if (name === "Bash") return asStr(input.description) || "Running a command";
   if (name === "Grep" || name === "Glob") return "Searching the code";
   if (name === "Task" || name === "Agent") return asStr(input.description) || "Starting a sub-agent";
   if (name === "StructuredOutput") return "Writing up findings";
@@ -1605,7 +1609,7 @@ function toFinding(wt, v) {
   return {
     id: newId("f"),
     source: "claude",
-    severity: SEVERITIES.includes(severity) ? severity : "info",
+    severity: SEVERITIES2.includes(severity) ? severity : "info",
     file: path8.isAbsolute(raw) ? path8.relative(wt.path, raw) : raw,
     startLine: start,
     endLine: Number(o.endLine) || start,

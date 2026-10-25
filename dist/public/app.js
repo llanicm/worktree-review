@@ -260,8 +260,8 @@ function reviewPick(wt) {
 function runningHtml(wt, k) {
   const r = wt.codeReviews[k];
   if (r?.status !== "running") return "";
-  return `<span class="cr-running ${k}"><span class="dot busy"></span>${NAMES[k]} reviewing <span class="cr-elapsed" data-start="${r.startedAt}">${elapsed(r.startedAt)}</span></span>
-    <button class="btn small" data-act="review-cancel" data-reviewer="${k}">Cancel</button>`;
+  return `<a href="#" class="cr-running ${k}" data-act="cr-panel" data-reviewer="${k}" title="${NAMES[k]} is reviewing. Show the review"><span class="dot busy"></span>${NAMES[k]}
+    <span class="cr-elapsed" data-start="${r.startedAt}">${elapsed(r.startedAt)}</span></a>`;
 }
 function menuHtml(wt, idle) {
   const pick = reviewPick(wt);
@@ -345,8 +345,9 @@ function panelHtml(wt, r) {
   let head, body = "";
   if (r.status === "running") {
     head = `${name} is reviewing against <code>${esc(r.baseRef)}</code>`;
-    const note = `${r.message ? `${esc(r.message)}… ` : ""}${r.reviewer === "coderabbit" ? '<span class="muted">Reviews usually take 2–6 minutes and can take 15 or more.</span>' : ""}`;
-    body = `<div class="cr-working">${scanHtml(r)}<div><p>${note}</p><p class="muted">${findings.length ? `${findings.length} finding${findings.length === 1 ? "" : "s"} so far. ` : ""}They show in the code as they arrive. You can leave this page.</p></div></div>`;
+    const so = findings.length ? `${findings.length} finding${findings.length === 1 ? "" : "s"} so far, shown in the code` : "Findings show in the code as they arrive";
+    const note = `${so}.${r.reviewer === "coderabbit" ? " Reviews usually take 2–6 minutes and can take 15 or more." : ""}`;
+    body = `<div class="cr-working">${scanHtml(r)}<div class="cr-status"><div class="cr-activity" title="${esc(r.message || "")}">${esc(r.message || "Working")}…</div><div class="muted small">${note}</div></div></div>`;
   } else if (r.status === "done") {
     head = `${name} · ${findings.length ? `${open.length} open of ${findings.length} finding${findings.length === 1 ? "" : "s"}` : "no findings"}`;
     if (!findings.length) body = `<p class="muted">${r.reviewedFiles.length ? `Reviewed ${r.reviewedFiles.length} file${r.reviewedFiles.length === 1 ? "" : "s"} and found` : "Found"} nothing to flag.</p>`;
@@ -354,15 +355,15 @@ function panelHtml(wt, r) {
     head = `${name} review ${r.status === "cancelled" ? "cancelled" : "failed"}`;
     body = `<p class="error">${esc(r.error || "Something went wrong.")}</p>`;
   }
-  const facts = [r.status === "running" ? `started ${ago(r.startedAt)}` : ago(r.finishedAt || r.startedAt)];
+  const facts = [r.status === "running" ? `<span class="cr-elapsed" data-start="${r.startedAt}" title="How long it has been running">${elapsed(r.startedAt)}</span>` : ago(r.finishedAt || r.startedAt)];
   if (r.usage) facts.push(`${r.usage.remaining} of ${r.usage.limit} reviews left this hour`);
   if (r.effort) facts.push(`${r.effort} effort`);
   if (r.costUsd) facts.push(`<span title="As Claude Code reports it. On a Claude plan this counts toward your usage rather than being billed.">$${r.costUsd.toFixed(2)}</span>`);
   const shown = open.filter(inDiff), loose = open.filter((f) => !inDiff(f));
   const byCommit = S.view?.diff.mode === "commits";
   if (r.status !== "running") lastCount.delete(r.reviewer);
-  return `<div class="panel cr-panel ${r.reviewer} ${r.status}"${r.status === "running" ? ` style="--ph:${phase(r).toFixed(2)}s"` : ""}>
-    <div class="panel-head"><span>${head}</span><span class="actions"><span class="muted small">${facts.join(" · ")}</span>${open.length > 1 ? `<button class="btn small" data-act="cr-send-all" data-reviewer="${r.reviewer}">Send all to Claude</button>` : ""}</span></div>
+  return `<div class="panel cr-panel ${r.reviewer} ${r.status}" id="cr-panel-${r.reviewer}"${r.status === "running" ? ` style="--ph:${phase(r).toFixed(2)}s"` : ""}>
+    <div class="panel-head"><span>${head}</span><span class="actions"><span class="muted small">${facts.join(" · ")}</span>${r.status === "running" ? `<button class="btn small" data-act="review-cancel" data-reviewer="${r.reviewer}">Cancel</button>` : ""}${open.length > 1 ? `<button class="btn small" data-act="cr-send-all" data-reviewer="${r.reviewer}">Send all to Claude</button>` : ""}</span></div>
     <div class="panel-body">
       ${stale ? `<div class="callout warn small">The code has changed since this review. Line numbers may be off; run ${name} again for a fresh look.</div>` : ""}
       ${body}
@@ -742,11 +743,13 @@ function agentChip(a) {
   const what = a.description || a.agentType;
   return `<span class="chip agent" title="${esc(a.agentType)} subagent started by Claude session ${esc(a.parent.name)} (${esc(a.parent.status)})${a.description ? `: ${esc(a.description)}` : ""}"><span class="dot busy"></span><span class="agent-parent">${esc(a.parent.name)}</span><span class="agent-sep">›</span><span class="agent-what">${esc(what)}</span></span>`;
 }
-function reviewChip(wt) {
-  const running = REVIEWERS.filter((k) => wt.codeReviews[k]?.status === "running");
-  if (running.length) return `<span class="chip cr"><span class="dot busy"></span>${running.map((k) => NAMES[k]).join(", ")}</span>`;
-  const open = REVIEWERS.reduce((n, k) => n + (wt.codeReviews[k]?.open || 0), 0);
-  return open ? `<span class="chip cr">${open} finding${open === 1 ? "" : "s"}</span>` : "";
+function reviewChips(wt) {
+  return REVIEWERS.map((k) => {
+    const r = wt.codeReviews[k];
+    if (r?.status === "running") return `<span class="chip reviewer ${k}"><span class="dot busy"></span>${NAMES[k]} reviewing</span>`;
+    if (!r?.open) return "";
+    return `<span class="chip reviewer ${k}" title="${r.open} open ${NAMES[k]} finding${r.open === 1 ? "" : "s"}${r.worst && r.worst !== "none" ? `; the most serious is ${r.worst}` : ""}">${NAMES[k]} · ${r.open}</span>`;
+  }).join("");
 }
 function wtItem(wt, showNew) {
   const name = wt.branch || `detached @ ${wt.head?.slice(0, 8) || "?"}`;
@@ -766,7 +769,7 @@ function wtItem(wt, showNew) {
       ${nComments ? `<span class="chip comments">${nComments} comment${nComments === 1 ? "" : "s"}</span>` : ""}
       ${wt.busy ? '<span class="chip busy-chip"><span class="dot busy"></span>removing…</span>' : ""}
       ${wt.error ? `<span class="chip closed" title="${esc(wt.error.message)}">${wt.error.kind === "broken-link" ? "broken link" : "can't read"}</span>` : wt.dirtyKind === "lockfile-only" ? '<span class="chip" title="Only a lockfile changed">lockfile changed</span>' : wt.dirtyKind === "deleted-only" ? `<span class="chip" title="Tracked files missing from disk; nothing is lost">${wt.dirty} missing</span>` : wt.dirty ? `<span class="chip" title="Uncommitted changes">${wt.dirty} uncommitted</span>` : ""}
-      ${reviewChip(wt)}
+      ${reviewChips(wt)}
     </div>
   </a>`;
 }
@@ -2024,7 +2027,7 @@ Their folders are deleted. ${merged ? `${merged} merged branch${merged === 1 ? "
       effort: reviewer === "claude" ? effort : void 0,
       message: "Starting"
     };
-    wt.codeReviews[reviewer] = { status: "running", startedAt: now, finishedAt: null, heartbeatAt: now, open: 0, total: 0, sig: "starting", stale: false };
+    wt.codeReviews[reviewer] = { status: "running", startedAt: now, finishedAt: null, heartbeatAt: now, open: 0, total: 0, sig: "starting", stale: false, worst: null };
     S.reviewMenu = null;
     indexFindings();
     renderMain();
@@ -2093,6 +2096,11 @@ Their folders are deleted. ${merged ? `${merged} merged branch${merged === 1 ? "
       void finding.offsetWidth;
       finding.classList.add("flash");
     }
+  },
+  "cr-panel": (el, e) => {
+    e.preventDefault();
+    const panel = document.getElementById(`cr-panel-${attr(el, "reviewer")}`);
+    panel?.scrollIntoView({ block: "nearest", behavior: "smooth" });
   },
   recheck: () => {
     S.integ = null;
