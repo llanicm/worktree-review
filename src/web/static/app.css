@@ -309,7 +309,7 @@ tr.thread-row td { padding: 0 !important; background: var(--bg-soft); border-top
 .status { font-size: 11px; padding: 0 6px; border-radius: 999px; border: 1px solid currentColor; }
 .status.draft { color: var(--amber); }
 .status.pending { color: var(--accent); }
-.status.delivered { color: var(--purple); }
+.status.delivered { color: var(--reviewer-claude); }
 .status.resolved { color: var(--green); }
 .thread-actions { display: flex; gap: 6px; padding: 6px 12px 8px; border-top: 1px solid var(--border-soft); flex-wrap: wrap; }
 .editor { border: 1px solid var(--accent); border-radius: 8px; background: var(--bg); padding: 8px; }
@@ -430,10 +430,10 @@ table.kv td:first-child { color: var(--fg-muted); white-space: nowrap; }
 .verdict strong { color: var(--fg); font-family: var(--mono); font-size: 12px; }
 
 /* ---------- code reviews (CodeRabbit or Claude) ----------
-   Each reviewer has one colour, used for everything of its own: CodeRabbit orange, Claude purple. --rv is that colour
+   Each reviewer has one colour, used for everything of its own: CodeRabbit orange, Claude teal (purple is for merged PRs, as on GitHub). --rv is that colour
    wherever the reviewer's class is set. How serious a finding is shows only on its severity tag, in red / amber / grey. */
-:root { --rabbit: #e8590c; --rabbit-soft: #fff4e6; --reviewer-claude: #8250df; --reviewer-claude-soft: #fbefff; }
-@media (prefers-color-scheme: dark) { :root { --rabbit: #ff8c42; --rabbit-soft: #2b1d12; --reviewer-claude: #ab7df8; --reviewer-claude-soft: #231a33; } }
+:root { --rabbit: #e8590c; --rabbit-soft: #fff4e6; --reviewer-claude: #0a7d8c; --reviewer-claude-soft: #e6f6f7; }
+@media (prefers-color-scheme: dark) { :root { --rabbit: #ff8c42; --rabbit-soft: #2b1d12; --reviewer-claude: #39c5cf; --reviewer-claude-soft: #0f2629; } }
 .coderabbit { --rv: var(--rabbit); --rv-soft: var(--rabbit-soft); }
 .claude { --rv: var(--reviewer-claude); --rv-soft: var(--reviewer-claude-soft); }
 .chip.reviewer { color: var(--rv); border-color: currentColor; }
