@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.4.1](https://github.com/llanicm/worktree-review/compare/v2.4.0...v2.4.1) (2026-10-25)
+
+
+### Bug fixes
+
+* give each reviewer one colour everywhere, and severity its own ([#20](https://github.com/llanicm/worktree-review/issues/20)) ([5ac03d5](https://github.com/llanicm/worktree-review/commit/5ac03d51a81d394b48bd3c9ba0f0fa582138e973))
+* wake sessions that Claude Code marks as "shell" ([#21](https://github.com/llanicm/worktree-review/issues/21)) ([97e41a6](https://github.com/llanicm/worktree-review/commit/97e41a639540af39a72d3a1e74a54822a013342a))
+
 ## [2.4.0](https://github.com/llanicm/worktree-review/compare/v2.3.0...v2.4.0) (2026-10-23)
 
 
