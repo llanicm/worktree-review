@@ -1,5 +1,6 @@
 import type { CodeRabbitUsage, CodeReview, Finding } from '../shared/api.ts';
 import { addSnippet, assertIdle, beginReview, runReview, startInBackground } from './code-review.ts';
+import { config } from './config.ts';
 import { httpError } from './exec.ts';
 import { coderabbitReady, getIntegrations, lastJson, probe } from './integrations.ts';
 import type { WorktreeRecord } from './types.ts';
@@ -65,7 +66,11 @@ export function startCodeRabbit(wt: WorktreeRecord): CodeReview {
 }
 
 function runCodeRabbit(wt: WorktreeRecord, review: CodeReview): void {
-  runReview(wt, review, 'coderabbit', ['review', '--agent', '--base', wt.baseRef ?? '', '--include-untracked'], {
+  // --fresh: by default the CLI reviews only what changed since its last local review, but each review here
+  // replaces the previous one, so a re-run would look clean while earlier findings still stand.
+  const args = ['review', '--agent', '--fresh', '--base', wt.baseRef ?? '', '--include-untracked'];
+  if (config.coderabbitDeep) args.push('--deep');
+  runReview(wt, review, 'coderabbit', args, {
     onEvent: (ev) => {
       if (ev.type === 'finding') review.findings.push(addSnippet(wt, toFinding(ev)));
       else if (ev.type === 'complete') { review.reviewedFiles = isStringArray(ev.reviewedFiles) ? ev.reviewedFiles : []; review.message = asStr(ev.message); }

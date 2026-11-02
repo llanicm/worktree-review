@@ -25,6 +25,8 @@ export interface Config {
   editor: Editor;
   /** The effort preselected when starting a Claude code review. */
   reviewEffort: ReviewEffort;
+  /** Run CodeRabbit with the same review policy as its GitHub PR reviews, rather than its lighter local one. */
+  coderabbitDeep: boolean;
 }
 
 // ---------- worktrees ----------

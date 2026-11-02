@@ -66,6 +66,7 @@ export function publicState(): PublicState {
     config: {
       autoCleanup: config.autoCleanup, recentDays: config.recentDays, editor: config.editor,
       prPollMinutes: config.prPollMinutes, roots: config.roots, extraRepos: config.extraRepos, reviewEffort: config.reviewEffort,
+      coderabbitDeep: config.coderabbitDeep,
     },
     onboardedAt: state.onboardedAt || null,
     repos: [...repos.values()].map((r) => ({ name: r.name, root: r.root, github: r.gh ? `${r.gh.owner}/${r.gh.name}` : null })),

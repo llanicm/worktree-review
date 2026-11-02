@@ -95,6 +95,8 @@ export function setupHtml(mode: Page) {
         <tr><td>CLI</td><td>${esc(cr.version || '')}</td></tr>
       </table>
       <p class="muted">Reviews count against the organization that owns each repo. To change your default organization, run ${cmd('coderabbit auth org')} in a terminal.</p>
+      <label class="setting"><input type="checkbox" data-cfg="coderabbitDeep" ${c.coderabbitDeep ? 'checked' : ''}>
+        <span><strong>Review as thoroughly as on GitHub</strong><br><span class="muted">Uses the same review policy as CodeRabbit's pull request reviews, so it finds what it would comment on the PR. Slower. Turn off for CodeRabbit's quicker, lighter local review.</span></span></label>
       ${welcome ? '' : '<div class="actions"><button class="btn small" data-act="cr-logout">Sign out</button></div>'}`;
   }
   steps.push(stepHtml(crIcon, 'CodeRabbit <span class="muted small">optional</span>', crBody));
