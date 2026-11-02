@@ -344,8 +344,9 @@ tr.thread-row td { padding: 0 !important; background: var(--bg-soft); border-top
 }
 .review-bar summary { padding: 10px 14px; cursor: pointer; font-weight: 600; display: flex; justify-content: space-between; align-items: center; gap: 10px; list-style: none; }
 .review-bar summary::-webkit-details-marker { display: none; }
-.review-bar .body { padding: 0 14px 12px; display: grid; gap: 8px; }
-.review-bar select { padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); font-size: 13px; }
+.review-bar .body { padding: 0 14px 12px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; }
+/* A long session name would otherwise widen the select, and with it the whole panel, past its edge. */
+.review-bar select { min-width: 0; max-width: 100%; text-overflow: ellipsis; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); font-size: 13px; }
 .review-bar .note { font-size: 12px; color: var(--fg-muted); }
 .pending-list { font-size: 12px; color: var(--fg-muted); display: grid; gap: 4px; }
 
