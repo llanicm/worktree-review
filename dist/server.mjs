@@ -159,7 +159,9 @@ var DEFAULT_CONFIG = {
   // Editor for "open" links: vscode, cursor, windsurf, zed, or none.
   editor: "vscode",
   // Effort preselected for Claude code reviews: low, medium, high, xhigh, or max.
-  reviewEffort: "low"
+  reviewEffort: "low",
+  // Review with CodeRabbit's GitHub PR review policy (--deep) rather than its lighter local one.
+  coderabbitDeep: true
 };
 var EDITORS = ["vscode", "cursor", "windsurf", "zed", "none"];
 var isEditor = (v) => typeof v === "string" && EDITORS.includes(v);
@@ -176,7 +178,8 @@ function loadConfig() {
     recentDays: typeof o.recentDays === "number" ? o.recentDays : d.recentDays,
     prPollMinutes: typeof o.prPollMinutes === "number" ? o.prPollMinutes : d.prPollMinutes,
     editor: isEditor(o.editor) ? o.editor : d.editor,
-    reviewEffort: isEffort(o.reviewEffort) ? o.reviewEffort : d.reviewEffort
+    reviewEffort: isEffort(o.reviewEffort) ? o.reviewEffort : d.reviewEffort,
+    coderabbitDeep: typeof o.coderabbitDeep === "boolean" ? o.coderabbitDeep : d.coderabbitDeep
   };
 }
 var config = loadConfig();
@@ -1360,7 +1363,8 @@ function publicState() {
       prPollMinutes: config.prPollMinutes,
       roots: config.roots,
       extraRepos: config.extraRepos,
-      reviewEffort: config.reviewEffort
+      reviewEffort: config.reviewEffort,
+      coderabbitDeep: config.coderabbitDeep
     },
     onboardedAt: state.onboardedAt || null,
     repos: [...repos.values()].map((r) => ({ name: r.name, root: r.root, github: r.gh ? `${r.gh.owner}/${r.gh.name}` : null })),
@@ -1726,7 +1730,9 @@ function startCodeRabbit(wt) {
   return review;
 }
 function runCodeRabbit(wt, review) {
-  runReview(wt, review, "coderabbit", ["review", "--agent", "--base", wt.baseRef ?? "", "--include-untracked"], {
+  const args = ["review", "--agent", "--fresh", "--base", wt.baseRef ?? "", "--include-untracked"];
+  if (config.coderabbitDeep) args.push("--deep");
+  runReview(wt, review, "coderabbit", args, {
     onEvent: (ev) => {
       if (ev.type === "finding") review.findings.push(addSnippet(wt, toFinding2(ev)));
       else if (ev.type === "complete") {
@@ -2078,12 +2084,12 @@ async function updateConfig(body) {
         continue;
       }
       config[k] = [...new Set(v.map((p) => p.trim()).filter(Boolean))];
-    } else if (k === "autoCleanup") {
+    } else if (k === "autoCleanup" || k === "coderabbitDeep") {
       if (typeof v !== "boolean") {
         errors.push(`Invalid value for ${k}`);
         continue;
       }
-      config.autoCleanup = v;
+      config[k] = v;
     } else if (k === "editor") {
       if (!isEditor(v)) {
         errors.push(`Invalid value for ${k}`);
