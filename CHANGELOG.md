@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.4.3](https://github.com/llanicm/worktree-review/compare/v2.4.2...v2.4.3) (2026-11-02)
+
+
+### Bug fixes
+
+* keep the review panel's contents inside it when a session name is long ([#26](https://github.com/llanicm/worktree-review/issues/26)) ([9e7c4e8](https://github.com/llanicm/worktree-review/commit/9e7c4e8fb71aab48e0175820daa551287eb51dde))
+
 ## [2.4.2](https://github.com/llanicm/worktree-review/compare/v2.4.1...v2.4.2) (2026-11-02)
 
 
