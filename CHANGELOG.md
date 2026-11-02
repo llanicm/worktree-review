@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.4.2](https://github.com/llanicm/worktree-review/compare/v2.4.1...v2.4.2) (2026-11-02)
+
+
+### Bug fixes
+
+* review the whole branch with CodeRabbit, using its PR review policy ([#24](https://github.com/llanicm/worktree-review/issues/24)) ([5238fce](https://github.com/llanicm/worktree-review/commit/5238fcee9f88ed37d3ede1b017bfe9bb8cb79ac7))
+
 ## [2.4.1](https://github.com/llanicm/worktree-review/compare/v2.4.0...v2.4.1) (2026-10-25)
 
 
