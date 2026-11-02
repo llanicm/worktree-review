@@ -18,6 +18,8 @@ export const DEFAULT_CONFIG: Config = {
   editor: 'vscode',
   // Effort preselected for Claude code reviews: low, medium, high, xhigh, or max.
   reviewEffort: 'low',
+  // Review with CodeRabbit's GitHub PR review policy (--deep) rather than its lighter local one.
+  coderabbitDeep: true,
 };
 
 export const EDITORS: readonly string[] = ['vscode', 'cursor', 'windsurf', 'zed', 'none'];
@@ -38,6 +40,7 @@ function loadConfig(): Config {
     prPollMinutes: typeof o.prPollMinutes === 'number' ? o.prPollMinutes : d.prPollMinutes,
     editor: isEditor(o.editor) ? o.editor : d.editor,
     reviewEffort: isEffort(o.reviewEffort) ? o.reviewEffort : d.reviewEffort,
+    coderabbitDeep: typeof o.coderabbitDeep === 'boolean' ? o.coderabbitDeep : d.coderabbitDeep,
   };
 }
 

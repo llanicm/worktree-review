@@ -343,6 +343,8 @@ else if (args[0] === 'auth' && args[1] === 'status') {
   await sleep(o.ms || 0);
   out({ includedReviews: { state: 'available', limit: 8, remaining: o.remaining ?? 6, fullCapacityInMs: 1_800_000, rollingWindowMs: 3_600_000, repository: 'acme/shop' } });
 } else if (args[0] === 'review') {
+  // Kept so a test can check which flags the server passed.
+  require('fs').writeFileSync(require('path').join(process.env.HOME, '.cr-review-args.json'), JSON.stringify(args));
   out({ type: 'review_context', baseBranch: 'main' });
   for (const message of ['Analyzing changes', 'Reviewing files']) { out({ type: 'status', message }); await sleep(400); }
   out({ type: 'finding', severity: 'major', fileName: 'src/discounts.ts', startLine: ${L.pct}, endLine: ${L.pct},
@@ -425,7 +427,7 @@ fs.writeFileSync(path.join(DEMO, 'pids'), pids.join('\n'));
 
 const DATA = path.join(CLAUDE, 'worktree-review');
 fs.mkdirSync(DATA, { recursive: true });
-fs.writeFileSync(path.join(DATA, 'config.json'), JSON.stringify({ roots: [], extraRepos: [], autoCleanup: true, recentDays: 3, prPollMinutes: 5, editor: 'vscode' }, null, 2));
+fs.writeFileSync(path.join(DATA, 'config.json'), JSON.stringify({ roots: [], extraRepos: [], autoCleanup: true, recentDays: 3, prPollMinutes: 5, editor: 'vscode', coderabbitDeep: true }, null, 2));
 fs.writeFileSync(path.join(DATA, 'state.json'), JSON.stringify({
   installedAt: now - 5 * DAY, onboardedAt: now - 5 * DAY, worktrees: {}, comments: [], reviews: [], codeReviews: {}, trash: [],
   cleaned: [{

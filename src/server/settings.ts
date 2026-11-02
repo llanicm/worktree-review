@@ -19,9 +19,9 @@ export async function updateConfig(body: unknown): Promise<void> {
       const missing = v.filter((p) => !fs.existsSync(expand(p.trim())));
       if (missing.length) { errors.push(`Folder not found: ${missing.join(', ')}`); continue; }
       config[k] = [...new Set(v.map((p) => p.trim()).filter(Boolean))];
-    } else if (k === 'autoCleanup') {
+    } else if (k === 'autoCleanup' || k === 'coderabbitDeep') {
       if (typeof v !== 'boolean') { errors.push(`Invalid value for ${k}`); continue; }
-      config.autoCleanup = v;
+      config[k] = v;
     } else if (k === 'editor') {
       if (!isEditor(v)) { errors.push(`Invalid value for ${k}`); continue; }
       config.editor = v;

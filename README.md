@@ -67,7 +67,9 @@ replies in the thread or resolves the comment with a note, and replying sends th
   session that counts toward your Claude usage. Pick its effort, from *low* (quickest) to *max* (most
   thorough), each time you run it; the effort it starts with is in Settings.
 - **CodeRabbit**, with the [CodeRabbit CLI](https://docs.coderabbit.ai/cli/overview) signed in. If
-  your company has CodeRabbit on GitHub, reviews of its repos use the company plan.
+  your company has CodeRabbit on GitHub, reviews of its repos use the company plan. Each review
+  covers the whole branch, not just what changed since the last one, and by default uses the same
+  policy as CodeRabbit's pull request reviews; Settings can switch it to the quicker, lighter local review.
 
 When both are available, it asks which to use. Each keeps its own latest review, so you can run
 both. Findings appear inline, next to your own comments, labelled with who found them. **Send to
@@ -100,7 +102,7 @@ worktree with a large `node_modules`. Every removal has a restore command under 
 ### Settings in the app
 
 The first visit walks you through setup. **Settings** (the gear in the sidebar) covers which folders
-are scanned, with a folder picker, GitHub and CodeRabbit status, signing in to CodeRabbit, the effort
+are scanned, with a folder picker, GitHub and CodeRabbit status, signing in to CodeRabbit, how thoroughly CodeRabbit reviews, the effort
 Claude's code reviews start with, auto-cleanup, which editor the *open* links use, and timings.
 
 ![Settings](docs/screenshots/settings.png)

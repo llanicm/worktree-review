@@ -341,6 +341,28 @@ test('starting a review answers at once, and a problem found while setting up fa
   }
 });
 
+test('CodeRabbit reviews the whole branch each time, with the PR review policy unless turned off', async () => {
+  const wt = await wtBy('fix/tax-rounding');
+  const argsFile = path.join(DEMO, 'home', '.cr-review-args.json');
+  const run = async (): Promise<string[]> => {
+    fs.rmSync(argsFile, { force: true });
+    await post(`/api/worktrees/${wt.id}/code-review`, { reviewer: 'coderabbit' });
+    await until(async () => (await wtBy('fix/tax-rounding')).codeReviews.coderabbit.status === 'done', 'the review to finish');
+    return JSON.parse(fs.readFileSync(argsFile, 'utf8'));
+  };
+  assert.equal((await state()).config.coderabbitDeep, true);
+  let args = await run();
+  assert.ok(args.includes('--fresh') && args.includes('--deep'), args.join(' '));
+  assert.equal((await api('POST', '/api/config', { coderabbitDeep: 'yes' })).status, 400);
+  await post('/api/config', { coderabbitDeep: false });
+  try {
+    args = await run();
+    assert.ok(args.includes('--fresh') && !args.includes('--deep'), args.join(' '));
+  } finally {
+    await post('/api/config', { coderabbitDeep: true });
+  }
+});
+
 test('a review goes stale only when the files themselves change', async () => {
   const branch = 'feat/checkout-discounts';
   const wt = await wtBy(branch);
