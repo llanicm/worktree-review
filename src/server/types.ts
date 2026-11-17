@@ -1,7 +1,7 @@
 // The server's internal records: what it keeps in memory and persists. The shapes it sends to
 // the page are in ../shared/api.ts.
 import type {
-  AgentRef, CleanedEntry, CodeReview, Comment, DiffStats, DirtyFile, DirtyKind, PRState,
+  AgentRef, CleanedEntry, CodeReview, Comment, DiffStats, DirtyFile, DirtyKind, PRState, PRThread,
   Review, Reviewer, Session, UnmatchedCommit, WorktreeError,
 } from '../shared/api.ts';
 
@@ -113,4 +113,20 @@ export interface State {
   trash: string[];
   /** wtId -> each reviewer's last review. */
   codeReviews: Record<string, Partial<Record<Reviewer, CodeReview>>>;
+  /** wtId -> the review threads on its PR, as last fetched. */
+  prThreads: Record<string, PRThreadsRecord>;
+}
+
+/** A PR's review threads as last fetched from GitHub. */
+export interface PRThreadsRecord {
+  number: number;
+  url: string;
+  /** The PR's updatedAt and head when last fetched; a change to either means fetch again. */
+  updatedAt: string | null;
+  headRefOid: string | null;
+  fetchedAt: number | null;
+  error: string | null;
+  threads: PRThread[];
+  /** The worktree fingerprint localLine was worked out for. */
+  mappedFp?: string | null;
 }

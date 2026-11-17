@@ -5,6 +5,7 @@ import { config } from './config.ts';
 import { claudeReady, coderabbitReady, crLogin } from './integrations.ts';
 import { jobs } from './jobs.ts';
 import { HOME, PORT, VERSION } from './paths.ts';
+import { prThreadsSummary } from './pr-threads.ts';
 import { prError } from './prs.ts';
 import { repos, sessions, state, takeChanged, wts } from './state.ts';
 import type { State, WorktreeRecord, WorktreeState } from './types.ts';
@@ -54,6 +55,7 @@ function publicWorktree(wt: WorktreeRecord): Worktree {
       sig: sha1(mine.map((c) => `${c.id}${c.status}${c.replies.length}${c.body.length}`).join()
         + state.reviews.filter((r) => r.wtId === wt.id).map((r) => r.status).join()).slice(0, 10),
     },
+    prThreads: prThreadsSummary(wt),
   };
 }
 

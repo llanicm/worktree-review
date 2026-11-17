@@ -2,6 +2,7 @@
 import type { PublicState } from '../shared/api.ts';
 import { loadCodeReviews, NAMES, REVIEWERS, reviewsSig } from './code-review.ts';
 import { loadView, onHash, reloadComments } from './loading.ts';
+import { loadPRThreads, prSig } from './pr-threads.ts';
 import { loadIntegrations, setupSig } from './setup.ts';
 import { renderSidebar } from './sidebar.ts';
 import { curWt, need, S } from './state.ts';
@@ -76,6 +77,16 @@ function onState(st: PublicState) {
         toast(r.status === 'done' ? `${NAMES[k]} finished: ${n ? `${n} finding${n === 1 ? '' : 's'}` : 'no findings'}` : `${NAMES[k]} review stopped`, r.status === 'failed');
       });
       if (wt.comments.sig !== cur.commentSig) { cur.commentSig = wt.comments.sig; reloadComments(); } else renderMain();
+    });
+  } else if (prSig(wt) !== v.prSig) {
+    const before = v.prThreads?.threads.length ?? 0;
+    v.prSig = prSig(wt);
+    loadPRThreads().then(() => {
+      const cur = S.view;
+      if (cur !== v) return;
+      const n = (cur.prThreads?.threads.length ?? 0) - before;
+      if (n > 0 && before) toast(`${n} new comment thread${n === 1 ? '' : 's'} on PR #${wt.pr?.number}`);
+      if (wt.comments.sig !== cur.commentSig) { cur.commentSig = wt.comments.sig; reloadComments(); } else if (!document.activeElement?.matches('textarea')) renderMain();
     });
   } else if (wt.comments.sig !== v.commentSig) {
     v.commentSig = wt.comments.sig;

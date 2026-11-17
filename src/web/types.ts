@@ -1,6 +1,7 @@
 // Client-only types: what app.js derives from the API responses in src/shared/api.ts.
 import type {
-  BaseChoices, BlameResponse, CodeReview, FileBlame, Comment, DiffResponse, DirListing, Finding, Integrations, PublicState, Review, ReviewEffort, Reviewer, ReviewStatus,
+  BaseChoices, BlameResponse, CodeReview, FileBlame, Comment, DiffResponse, DirListing, Finding, Integrations, PRThread, PRThreads, PublicState, Review, ReviewEffort,
+  Reviewer, ReviewStatus,
 } from '../shared/api.ts';
 
 // ---------- parsed diffs ----------
@@ -78,6 +79,10 @@ export interface View {
   codeReviews?: Partial<Record<Reviewer, CodeReview>>;
   /** Open findings by "file|new|line" anchor. */
   crByAnchor?: Map<string, Finding[]>;
+  prThreads?: PRThreads;
+  prSig?: string;
+  /** Open PR review threads by "file|new|line" anchor. */
+  prByAnchor?: Map<string, PRThread[]>;
   headerSig?: string;
   /** The "Comments on files not in this view" panel as last rendered, so in-place patches know whether it changed. */
   orphanHtml?: string;

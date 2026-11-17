@@ -7,6 +7,7 @@ import { cleanPicked, cleanupGroups } from './cleanup.ts';
 import { keyOf, parseKey, sameCommit } from './diff.ts';
 import { blameKey, fileCommitsOf, isCollapsed } from './file.ts';
 import { loadView, reloadComments } from './loading.ts';
+import { loadPRThreads, syncPRThreads } from './pr-threads.ts';
 import { closePicker, openPicker } from './picker.ts';
 import { closeResult, showResult } from './result.ts';
 import { loadIntegrations, saveConfig } from './setup.ts';
@@ -42,6 +43,13 @@ export async function saveEditor(ek: string) {
     await api('PATCH', `/api/comments/${rest}`, { body: text });
   } else if (kind === 'reply') {
     await api('POST', `/api/comments/${rest}/reply`, { body: text, author: 'you' });
+  } else if (kind === 'gh') {
+    await api('POST', `/api/pr-threads/${rest}/reply`, { body: text });
+    S.editors.delete(ek);
+    toast('Reply posted on GitHub');
+    await loadPRThreads();
+    renderMain();
+    return;
   }
   S.editors.delete(ek);
   await reloadComments();
@@ -296,6 +304,25 @@ export const actions: Record<string, Action> = {
     toast(`Added ${sent} finding${sent === 1 ? '' : 's'} to your review as drafts`);
     await loadCodeReviews();
     await reloadComments();
+  },
+  'pr-send': async (el) => { await api('POST', `/api/pr-threads/${attr(el, 'id')}/send`); await loadPRThreads(); await reloadComments(); },
+  'pr-dismiss': async (el) => { await api('POST', `/api/pr-threads/${attr(el, 'id')}/dismiss`); await loadPRThreads(); renderMain(); },
+  'pr-restore': async (el) => { await api('POST', `/api/pr-threads/${attr(el, 'id')}/restore`); await loadPRThreads(); renderMain(); },
+  'pr-reply': (el) => {
+    const ek = `gh:${attr(el, 'id')}`;
+    S.editors.set(ek, el.dataset.claude ? view().prThreads?.claudeReplies[attr(el, 'id')] ?? '' : '');
+    S.focusEk = ek;
+    renderMain();
+  },
+  'pr-resolve': async (el) => { await api('POST', `/api/pr-threads/${attr(el, 'id')}/resolve`); toast('Resolved on GitHub'); await loadPRThreads(); renderMain(); },
+  'pr-unresolve': async (el) => { await api('POST', `/api/pr-threads/${attr(el, 'id')}/unresolve`); await loadPRThreads(); renderMain(); },
+  'pr-sync': async () => {
+    const wt = curWt();
+    if (!wt) return;
+    const p = view().prThreads;
+    if (p) p.syncing = true;
+    renderMain();
+    try { await syncPRThreads(wt); } finally { renderMain(); }
   },
   'cr-jump': (el, e) => {
     e.preventDefault();

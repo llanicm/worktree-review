@@ -1,6 +1,7 @@
 // ---------- loading & routing ----------
 import type { BlameResponse, CommentsResponse, DiffResponse, FileBlame } from '../shared/api.ts';
 import { loadCodeReviews, reviewsSig } from './code-review.ts';
+import { loadPRThreads, prSig, syncPRThreads } from './pr-threads.ts';
 import { redrawFile } from './collapse.ts';
 import { blameKey } from './file.ts';
 import { parseDiff } from './diff.ts';
@@ -38,7 +39,7 @@ export async function loadView({ quiet = false } = {}) {
         .map((f, i) => ({ f, i, k: first(f.path) })).sort((a, b) => a.k - b.k || a.i - b.i).map((x) => x.f);
     }
     const prev = S.view;
-    const v: View = { wtId: wt.id, diff, files, groups, comments: cm.comments, reviews: cm.reviews, commentSig: wt.comments.sig, crSig: reviewsSig(wt), blame: prev?.wtId === wt.id && prev.blame?.fingerprint === diff.fingerprint ? prev.blame : null };
+    const v: View = { wtId: wt.id, diff, files, groups, comments: cm.comments, reviews: cm.reviews, commentSig: wt.comments.sig, crSig: reviewsSig(wt), prSig: prSig(wt), blame: prev?.wtId === wt.id && prev.blame?.fingerprint === diff.fingerprint ? prev.blame : null };
     S.view = v;
     if (diff.mode !== 'commits' && !v.blame && diff.commits.length) {
       api<BlameResponse>('GET', `/api/worktrees/${wt.id}/blame`).then((b) => {
@@ -47,7 +48,7 @@ export async function loadView({ quiet = false } = {}) {
         applyBlame();
       }, () => {});
     }
-    await loadCodeReviews();
+    await Promise.all([loadCodeReviews(), loadPRThreads()]);
     if (seq !== S.seq) return;
     S.stale = false;
     renderMain();
@@ -77,6 +78,8 @@ function select(id: string) {
   S.baseOther = null;
   const wt = S.st?.worktrees.find((w) => w.id === id);
   if (wt) loadBases(wt);
+  // Opening a worktree checks its PR's comments now, rather than at the next minute's check.
+  if (wt) syncPRThreads(wt).catch(() => {});
   S.toggled.clear();
   S.forceRender.clear();
   S.editors.clear();

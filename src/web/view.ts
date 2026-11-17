@@ -5,6 +5,7 @@ import { cleanupPageHtml } from './cleanup.ts';
 import { keyOf, parseKey } from './diff.ts';
 import { cbarHtml, commitClass, commitOfLine, placedCommentIds, renderFile, threadHtml } from './file.ts';
 import { headerHtml } from './header.ts';
+import { prPanelHtml } from './pr-threads.ts';
 import { beginRender, endRender } from './lazy.ts';
 import { setupHtml } from './setup.ts';
 import { curWt, need, S, st, view } from './state.ts';
@@ -67,6 +68,7 @@ export function renderMain() {
         <button class="btn" data-act="mark-reviewed" title="Remember this exact state so you can see only what changes next">Mark as reviewed</button>
       </div>
     </div>
+    ${prPanelHtml(wt)}
     ${reviewPanelsHtml(wt)}
     ${v.diff.mode !== 'commits' && v.diff.truncated ? '<div class="callout warn">This diff is very large and was cut off.</div>' : ''}
     ${orphanPanel}
