@@ -148,7 +148,8 @@ function panelHtml(wt: Worktree, r: CodeReview) {
     body = `<p class="error">${esc(r.error || 'Something went wrong.')}</p>`;
   }
   const facts = [r.status === 'running' ? `<span class="cr-elapsed" data-start="${r.startedAt}" title="How long it has been running">${elapsed(r.startedAt)}</span>` : ago(r.finishedAt || r.startedAt)];
-  if (r.usage) facts.push(`${r.usage.remaining} of ${r.usage.limit} reviews left this hour`);
+  // An unavailable allowance comes without its size, so there's no count to show.
+  if (r.usage?.limit) facts.push(`${r.usage.remaining} of ${r.usage.limit} reviews left this hour`);
   if (r.useCredits) facts.push('usage credits');
   if (r.effort) facts.push(`${r.effort} effort`);
   if (r.costUsd) facts.push(`<span title="As Claude Code reports it. On a Claude plan this counts toward your usage rather than being billed.">$${r.costUsd.toFixed(2)}</span>`);
