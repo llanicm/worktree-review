@@ -26,6 +26,7 @@ export const S: State = {
   baseOther: null,
   blameOn: new Set(),
   fileBlame: new Map(),
+  reviewBarOpen: new Map(),
   openBodies: new Set(),
   removeErrors: {},
   seenJobs: new Set(),

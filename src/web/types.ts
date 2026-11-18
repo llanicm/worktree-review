@@ -119,6 +119,7 @@ export interface State {
   baseOther: string | null;        // wtId showing the free-text base input
   blameOn: Set<string>;            // file uids showing the Blame column
   fileBlame: Map<string, FileBlame>; // `${fingerprint}:${path}` -> full-history blame
+  reviewBarOpen: Map<string, boolean>; // worktree -> the review bar opened or minimised by hand
   openBodies: Set<number>;         // commit messages expanded past the clamp
   removeErrors: Record<string, string>; // wtId -> why the last removal failed
   seenJobs: Set<string>;           // finished jobs already handled
