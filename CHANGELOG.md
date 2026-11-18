@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.5.0](https://github.com/llanicm/worktree-review/compare/v2.4.3...v2.5.0) (2026-11-18)
+
+
+### Features
+
+* show PR review comments in the diff and answer them from there ([#28](https://github.com/llanicm/worktree-review/issues/28)) ([98d386c](https://github.com/llanicm/worktree-review/commit/98d386cd28a33d623707a985cf696cdf8cd6924f))
+
 ## [2.4.3](https://github.com/llanicm/worktree-review/compare/v2.4.2...v2.4.3) (2026-11-02)
 
 
