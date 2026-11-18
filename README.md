@@ -70,6 +70,8 @@ replies in the thread or resolves the comment with a note, and replying sends th
   your company has CodeRabbit on GitHub, reviews of its repos use the company plan. Each review
   covers the whole branch, not just what changed since the last one, and by default uses the same
   policy as CodeRabbit's pull request reviews; Settings can switch it to the quicker, lighter local review.
+  Once your free hourly CodeRabbit reviews are used up, it stops and asks before running one on paid
+  usage credits.
 
 When both are available, it asks which to use. Each keeps its own latest review, so you can run
 both. Findings appear inline, next to your own comments, labelled with who found them. **Send to

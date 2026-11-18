@@ -434,6 +434,10 @@ export interface CodeReview {
   heartbeatAt: number;
   /** CodeRabbit's hourly allowance, as of the start. */
   usage: CodeRabbitUsage | null;
+  /** CodeRabbit only: it stopped because none of the hourly allowance was left (or it couldn't tell), so going on would cost usage credits. */
+  needsCredits?: boolean;
+  /** CodeRabbit only: you agreed this review could be paid for with usage credits. */
+  useCredits?: boolean;
   /** Claude's effort level, and what the run cost as Claude Code reports it. */
   effort?: ReviewEffort;
   costUsd?: number | null;
@@ -447,6 +451,8 @@ export interface StartCodeReview {
   reviewer: Reviewer;
   /** Claude only; the configured default when left out. */
   effort?: ReviewEffort;
+  /** CodeRabbit only: go on past the hourly allowance, paid with CodeRabbit usage credits. Never assumed. */
+  useCredits?: boolean;
 }
 
 /** GET /api/worktrees/:id/code-reviews */

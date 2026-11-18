@@ -134,7 +134,7 @@ export const routes: Route[] = [
   ['POST', /^\/api\/worktrees\/(\w+)\/code-review$/, (m, raw) => {
     const body = bodyOf<Partial<StartCodeReview>>(raw);
     const wt = getWt(arg(m));
-    if (body.reviewer === 'coderabbit') return startCodeRabbit(wt);
+    if (body.reviewer === 'coderabbit') return startCodeRabbit(wt, body.useCredits === true);
     if (body.reviewer === 'claude') return startClaudeReview(wt, body.effort);
     throw httpError(400, 'Choose a reviewer: coderabbit or claude.');
   }],

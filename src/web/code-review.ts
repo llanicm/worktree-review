@@ -39,7 +39,7 @@ function menuHtml(wt: Worktree, idle: Reviewer[]) {
     <span><strong>${NAMES[k]}</strong><br><span class="muted small">${note}</span></span></label>`;
   return `<div class="review-menu" role="dialog" aria-label="Run code review">
     ${idle.length > 1 ? `<div class="review-menu-title">Who should review?</div>
-      ${choice('coderabbit', 'The CodeRabbit CLI. Uses one of your hourly CodeRabbit reviews.')}
+      ${choice('coderabbit', 'The CodeRabbit CLI. Uses one of your free hourly CodeRabbit reviews, and asks before using paid credits.')}
       ${choice('claude', "Claude Code's built-in /code-review, run on this machine.")}` : ''}
     ${pick.reviewer === 'claude' ? `<label class="setting row"><span>Effort</span>
       <select data-review="effort">${EFFORTS.map(([v, l]) => `<option value="${v}" ${pick.effort === v ? 'selected' : ''}>${l}</option>`).join('')}</select></label>
@@ -138,12 +138,19 @@ function panelHtml(wt: Worktree, r: CodeReview) {
   } else if (r.status === 'done') {
     head = `${name} · ${findings.length ? `${open.length} open of ${findings.length} finding${findings.length === 1 ? '' : 's'}` : 'no findings'}`;
     if (!findings.length) body = `<p class="muted">${r.reviewedFiles.length ? `Reviewed ${r.reviewedFiles.length} file${r.reviewedFiles.length === 1 ? '' : 's'} and found` : 'Found'} nothing to flag.</p>`;
+  } else if (r.needsCredits) {
+    head = `${name} review not run`;
+    body = `<p>${esc(r.error || 'No free CodeRabbit reviews left this hour.')}</p>
+      <p class="muted small">Running it now uses CodeRabbit usage credits, which your CodeRabbit organization is billed for.</p>
+      <div class="actions"><button class="btn small" data-act="review-start" data-credits="1">Run with usage credits</button></div>`;
   } else {
     head = `${name} review ${r.status === 'cancelled' ? 'cancelled' : 'failed'}`;
     body = `<p class="error">${esc(r.error || 'Something went wrong.')}</p>`;
   }
   const facts = [r.status === 'running' ? `<span class="cr-elapsed" data-start="${r.startedAt}" title="How long it has been running">${elapsed(r.startedAt)}</span>` : ago(r.finishedAt || r.startedAt)];
-  if (r.usage) facts.push(`${r.usage.remaining} of ${r.usage.limit} reviews left this hour`);
+  // An unavailable allowance comes without its size, so there's no count to show.
+  if (r.usage?.limit) facts.push(`${r.usage.remaining} of ${r.usage.limit} reviews left this hour`);
+  if (r.useCredits) facts.push('usage credits');
   if (r.effort) facts.push(`${r.effort} effort`);
   if (r.costUsd) facts.push(`<span title="As Claude Code reports it. On a Claude plan this counts toward your usage rather than being billed.">$${r.costUsd.toFixed(2)}</span>`);
   const shown = open.filter(inDiff), loose = open.filter((f) => !inDiff(f));
