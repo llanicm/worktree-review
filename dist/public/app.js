@@ -269,7 +269,7 @@ function menuHtml(wt, idle) {
     <span><strong>${NAMES[k]}</strong><br><span class="muted small">${note}</span></span></label>`;
   return `<div class="review-menu" role="dialog" aria-label="Run code review">
     ${idle.length > 1 ? `<div class="review-menu-title">Who should review?</div>
-      ${choice("coderabbit", "The CodeRabbit CLI. Uses one of your hourly CodeRabbit reviews.")}
+      ${choice("coderabbit", "The CodeRabbit CLI. Uses one of your free hourly CodeRabbit reviews, and asks before using paid credits.")}
       ${choice("claude", "Claude Code's built-in /code-review, run on this machine.")}` : ""}
     ${pick.reviewer === "claude" ? `<label class="setting row"><span>Effort</span>
       <select data-review="effort">${EFFORTS.map(([v, l]) => `<option value="${v}" ${pick.effort === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
@@ -351,12 +351,18 @@ function panelHtml(wt, r) {
   } else if (r.status === "done") {
     head = `${name} · ${findings.length ? `${open.length} open of ${findings.length} finding${findings.length === 1 ? "" : "s"}` : "no findings"}`;
     if (!findings.length) body = `<p class="muted">${r.reviewedFiles.length ? `Reviewed ${r.reviewedFiles.length} file${r.reviewedFiles.length === 1 ? "" : "s"} and found` : "Found"} nothing to flag.</p>`;
+  } else if (r.needsCredits) {
+    head = `${name} review not run`;
+    body = `<p>${esc(r.error || "No free CodeRabbit reviews left this hour.")}</p>
+      <p class="muted small">Running it now uses CodeRabbit usage credits, which your CodeRabbit organization is billed for.</p>
+      <div class="actions"><button class="btn small" data-act="review-start" data-credits="1">Run with usage credits</button></div>`;
   } else {
     head = `${name} review ${r.status === "cancelled" ? "cancelled" : "failed"}`;
     body = `<p class="error">${esc(r.error || "Something went wrong.")}</p>`;
   }
   const facts = [r.status === "running" ? `<span class="cr-elapsed" data-start="${r.startedAt}" title="How long it has been running">${elapsed(r.startedAt)}</span>` : ago(r.finishedAt || r.startedAt)];
-  if (r.usage) facts.push(`${r.usage.remaining} of ${r.usage.limit} reviews left this hour`);
+  if (r.usage?.limit) facts.push(`${r.usage.remaining} of ${r.usage.limit} reviews left this hour`);
+  if (r.useCredits) facts.push("usage credits");
   if (r.effort) facts.push(`${r.effort} effort`);
   if (r.costUsd) facts.push(`<span title="As Claude Code reports it. On a Claude plan this counts toward your usage rather than being billed.">$${r.costUsd.toFixed(2)}</span>`);
   const shown = open.filter(inDiff), loose = open.filter((f) => !inDiff(f));
@@ -2127,11 +2133,13 @@ Their folders are deleted. ${merged ? `${merged} merged branch${merged === 1 ? "
     if (S.reviewMenu && S.reviewPick) S.reviewPick = { ...S.reviewPick, effort: null };
     renderMain();
   },
-  "review-start": async () => {
+  "review-start": async (el) => {
     const wt = curWt();
     if (!wt) return;
-    const { reviewer, effort } = reviewPick(wt);
-    const body = reviewer === "claude" ? { reviewer, effort } : { reviewer };
+    const credits = attr(el, "credits") === "1";
+    if (credits && !confirm("Run this CodeRabbit review with usage credits? Your CodeRabbit organization is billed for it.")) return;
+    const { reviewer, effort } = credits ? { reviewer: "coderabbit", effort: st().config.reviewEffort } : reviewPick(wt);
+    const body = reviewer === "claude" ? { reviewer, effort } : credits ? { reviewer, useCredits: true } : { reviewer };
     const reviews = view().codeReviews ??= {};
     const before = { review: reviews[reviewer], summary: wt.codeReviews[reviewer] };
     const now = Date.now();
@@ -2148,6 +2156,7 @@ Their folders are deleted. ${merged ? `${merged} merged branch${merged === 1 ? "
       heartbeatAt: now,
       usage: null,
       effort: reviewer === "claude" ? effort : void 0,
+      useCredits: credits || void 0,
       message: "Starting"
     };
     wt.codeReviews[reviewer] = { status: "running", startedAt: now, finishedAt: null, heartbeatAt: now, open: 0, total: 0, sig: "starting", stale: false, worst: null };
@@ -2168,7 +2177,7 @@ Their folders are deleted. ${merged ? `${merged} merged branch${merged === 1 ? "
     }
     if (S.view?.wtId === wt.id) (S.view.codeReviews ??= {})[reviewer] = r;
     indexFindings();
-    toast(reviewer === "coderabbit" ? "CodeRabbit started. This usually takes a few minutes." : `Claude started a ${effort}-effort review.`);
+    toast(reviewer === "coderabbit" ? `CodeRabbit started${credits ? ", paid with usage credits" : ""}. This usually takes a few minutes.` : `Claude started a ${effort}-effort review.`);
     renderMain();
   },
   "review-cancel": async (el) => {

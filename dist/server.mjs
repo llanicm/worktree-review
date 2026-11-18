@@ -2019,10 +2019,16 @@ function runClaude(wt, review, effort, base) {
 async function crUsage(wt) {
   const r = await probe("coderabbit", ["usage", "--agent"], { cwd: wt.path });
   const u = rec(rec(lastJson(r.out)).includedReviews);
-  if (u.state !== "available") return null;
-  const { limit, remaining, fullCapacityInMs, rollingWindowMs, repository } = u;
-  if (typeof limit !== "number" || typeof remaining !== "number" || typeof fullCapacityInMs !== "number" || typeof rollingWindowMs !== "number" || typeof repository !== "string") return null;
-  return { limit, remaining, fullInMs: fullCapacityInMs, windowMs: rollingWindowMs, repository };
+  const num = (v) => typeof v === "number" ? v : null;
+  const [limit, remaining, fullInMs, windowMs] = [num(u.limit), num(u.remaining), num(u.fullCapacityInMs), num(u.rollingWindowMs)];
+  if (u.state === "unavailable") return { limit: limit ?? 0, remaining: 0, fullInMs: fullInMs ?? 0, windowMs: windowMs ?? 0, repository: asStr(u.repository) || "" };
+  if (u.state !== "available" || limit === null || remaining === null || fullInMs === null || windowMs === null || typeof u.repository !== "string") return null;
+  return { limit, remaining, fullInMs, windowMs, repository: u.repository };
+}
+function creditsMessage(usage) {
+  if (!usage) return "Couldn't check how many of your hourly CodeRabbit reviews are left, so it didn't start in case it would be charged.";
+  const wait = usage.fullInMs ? ` More free ones come back within about ${Math.ceil(usage.fullInMs / 6e4)} minutes.` : "";
+  return `No free CodeRabbit reviews left${usage.repository ? ` for ${usage.repository}` : ""} this hour.${wait}`;
 }
 var asText = (v) => {
   if (v == null) return "";
@@ -2051,17 +2057,18 @@ function toFinding2(ev) {
     status: "open"
   };
 }
-function startCodeRabbit(wt) {
+function startCodeRabbit(wt, useCredits = false) {
   assertIdle(wt, "coderabbit");
-  const review = beginReview(wt, "coderabbit", { message: "Checking how many CodeRabbit reviews you have left" });
+  const review = beginReview(wt, "coderabbit", { message: "Checking how many CodeRabbit reviews you have left", useCredits: useCredits || void 0 });
   startInBackground(wt, review, async () => {
     const integ = coderabbitReady() ? null : await getIntegrations();
     if (integ && !integ.coderabbit.installed) throw httpError(409, "The CodeRabbit CLI is not installed. See Settings.");
     if (integ && !integ.coderabbit.authed) throw httpError(409, "Sign in to CodeRabbit in Settings first.");
     await refreshWorktree(wt);
     const usage = await crUsage(wt);
-    if (usage && usage.remaining <= 0) {
-      throw httpError(429, `No CodeRabbit reviews left for ${usage.repository} this hour. Try again in about ${Math.ceil(usage.fullInMs / 6e4)} minutes.`);
+    if (!useCredits && (!usage || usage.remaining <= 0)) {
+      review.needsCredits = true;
+      throw httpError(402, creditsMessage(usage));
     }
     review.usage = usage ? { ...usage, remaining: Math.max(0, usage.remaining - 1) } : null;
     review.message = "Starting";
@@ -2071,9 +2078,13 @@ function startCodeRabbit(wt) {
 function runCodeRabbit(wt, review) {
   const args = ["review", "--agent", "--fresh", "--base", wt.baseRef ?? "", "--include-untracked"];
   if (config.coderabbitDeep) args.push("--deep");
+  if (review.useCredits) args.push("--use-credits");
   runReview(wt, review, "coderabbit", args, {
     onEvent: (ev) => {
-      if (ev.type === "finding") review.findings.push(addSnippet(wt, toFinding2(ev)));
+      if (ev.type === "action_required" || ev.status === "awaiting_confirmation") {
+        review.needsCredits = true;
+        review.error = asStr(ev.message) || "No free CodeRabbit reviews left this hour. CodeRabbit is waiting for you to agree to pay for this one with usage credits.";
+      } else if (ev.type === "finding") review.findings.push(addSnippet(wt, toFinding2(ev)));
       else if (ev.type === "complete") {
         review.reviewedFiles = isStringArray(ev.reviewedFiles) ? ev.reviewedFiles : [];
         review.message = asStr(ev.message);
@@ -2641,7 +2652,7 @@ var routes = [
   ["POST", /^\/api\/worktrees\/(\w+)\/code-review$/, (m, raw) => {
     const body = bodyOf(raw);
     const wt = getWt(arg(m));
-    if (body.reviewer === "coderabbit") return startCodeRabbit(wt);
+    if (body.reviewer === "coderabbit") return startCodeRabbit(wt, body.useCredits === true);
     if (body.reviewer === "claude") return startClaudeReview(wt, body.effort);
     throw httpError(400, "Choose a reviewer: coderabbit or claude.");
   }],
