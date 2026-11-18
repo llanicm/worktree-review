@@ -102,6 +102,16 @@ export const actions: Record<string, Action> = {
   },
   'collapse-all': () => collapseAll(view()),
   'expand-all': () => expandAll(view()),
+  'toggle-review-bar': (el, e) => {
+    e.preventDefault(); // the bar is a <details>; its open state is kept here so a redraw doesn't undo it
+    const bar = el.parentElement;
+    if (!(bar instanceof HTMLDetailsElement)) return;
+    bar.open = !bar.open;
+    S.reviewBarOpen.set(attr(el, 'id'), bar.open);
+    el.title = bar.open ? 'Minimise' : 'Expand';
+    const caret = el.querySelector('.caret');
+    if (caret) caret.textContent = bar.open ? '▾' : '▸';
+  },
   'toggle-body': (el) => toggleBody(Number(attr(el, 'n'))),
   'toggle-commit': (el) => {
     const n = Number(attr(el, 'n'));

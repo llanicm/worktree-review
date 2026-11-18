@@ -577,8 +577,14 @@ test('the page renders a worktree without errors', { skip: !fs.existsSync(proces
     assert.match(blameText, /Not committed yet/);
     await page.eval("document.querySelector('.blame-btn.on').click()");
     assert.ok(await page.waitFor("document.querySelectorAll('td.blame').length === 0"), 'blame switched off');
+    // The review bar can be minimised, and stays so when the page redraws.
+    const barOpen = "document.querySelector('details.review-bar').open";
+    const wasOpen = await page.eval<boolean>(barOpen);
+    await page.eval("document.querySelector('.review-bar summary').click()");
+    assert.equal(await page.eval<boolean>(barOpen), !wasOpen, 'clicking the bar toggles it');
     await page.eval("document.querySelector('[data-act=mode][data-mode=commits]').click()");
     assert.ok(await page.waitFor("document.querySelectorAll('.commit-group').length >= 3"), 'a section per commit');
+    assert.equal(await page.eval<boolean>(barOpen), !wasOpen, 'the review bar keeps its state through a redraw');
     for (const hash of ['#/cleanup', '#/settings']) {
       await page.eval(`location.hash = '${hash}'`);
       assert.ok(await page.waitFor("document.querySelector('#main h1')?.textContent"), hash);
