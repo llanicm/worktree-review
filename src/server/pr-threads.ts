@@ -57,7 +57,12 @@ const THREAD_FIELDS = `id path line startLine originalLine diffSide isResolved i
 
 const nodesOf = (v: unknown): unknown[] => { const n = rec(v).nodes; return Array.isArray(n) ? n : []; };
 const numOrNull = (v: unknown): number | null => (typeof v === 'number' ? v : null);
-const stripHtmlComments = (s: string): string => s.replace(/<!--[\s\S]*?-->/g, '').trim();
+/** Repeats the replace until nothing changes, so a removal can't join its neighbours into a new match. */
+const stripAll = (s: string, re: RegExp): string => {
+  for (let prev = ''; prev !== s;) { prev = s; s = s.replace(re, ''); }
+  return s;
+};
+const stripHtmlComments = (s: string): string => stripAll(s, /<!--[\s\S]*?-->/g).trim();
 
 function parseComment(v: unknown): PRThreadComment[] {
   const c = rec(v);
@@ -92,7 +97,7 @@ export function parseCodeRabbit(body: string): Pick<PRThread, 'severity' | 'titl
   return {
     severity,
     title: title?.[1]?.trim() ?? '',
-    comment: head.replace(/<\/?[a-z][^>]*>/gi, '').trim(),
+    comment: stripAll(head, /<\/?[a-z][^>]*>/gi).trim(),
     suggestions: block(/Committable suggestion/i) || block(/Proposed fix|Suggested fix/i),
     codegen: block(/Prompt for AI Agents/i),
   };
