@@ -437,6 +437,15 @@ table.kv td:first-child { color: var(--fg-muted); white-space: nowrap; }
 @media (prefers-color-scheme: dark) { :root { --rabbit: #ff8c42; --rabbit-soft: #2b1d12; --reviewer-claude: #39c5cf; --reviewer-claude-soft: #0f2629; } }
 .coderabbit { --rv: var(--rabbit); --rv-soft: var(--rabbit-soft); }
 .claude { --rv: var(--reviewer-claude); --rv-soft: var(--reviewer-claude-soft); }
+/* GitHub PR review threads; CodeRabbit's keep CodeRabbit's colour. */
+:root { --reviewer-github: #6639ba; --reviewer-github-soft: #f5f0ff; }
+@media (prefers-color-scheme: dark) { :root { --reviewer-github: #b48cff; --reviewer-github-soft: #231a33; } }
+.github { --rv: var(--reviewer-github); --rv-soft: var(--reviewer-github-soft); }
+.pr-panel { border-color: var(--reviewer-github); --rv: var(--reviewer-github); --rv-soft: var(--reviewer-github-soft); }
+.pr-tags { display: flex; gap: 8px; align-items: baseline; padding: 6px 12px 0; font-size: 12px; }
+.pr-thread.resolved { opacity: .7; }
+.pr-thread .msg + .msg { border-top: 1px solid var(--border-soft); }
+.pr-panel .cr-item strong { flex: none; font-size: 12px; }
 .chip.reviewer { color: var(--rv); border-color: currentColor; }
 .review-run { position: relative; display: inline-flex; }
 .review-menu { position: absolute; right: 0; top: calc(100% + 6px); z-index: 20; width: 320px; max-width: calc(100vw - 32px); display: grid; gap: 10px;

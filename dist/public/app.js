@@ -399,6 +399,112 @@ async function loadCodeReviews() {
   }
 }
 
+// src/web/pr-threads.ts
+var CODERABBIT = "coderabbitai";
+var authorName = (login) => login === CODERABBIT ? "CodeRabbit" : login;
+var colourOf = (t) => t.comments[0]?.author === CODERABBIT ? "coderabbit" : "github";
+var prSig = (wt) => wt.prThreads?.sig || "";
+var showsInline = (t) => !t.isResolved && t.status === "open" && t.localLine !== null;
+var openThreads = (v) => (v.prThreads?.threads || []).filter((t) => !t.isResolved && t.status === "open");
+function indexPRThreads() {
+  const v = view();
+  const byAnchor2 = /* @__PURE__ */ new Map();
+  v.prByAnchor = byAnchor2;
+  for (const t of v.prThreads?.threads || []) {
+    if (!showsInline(t)) continue;
+    const k = keyOf(t.file, "new", t.localLine);
+    const here = byAnchor2.get(k);
+    if (here) here.push(t);
+    else byAnchor2.set(k, [t]);
+  }
+}
+async function loadPRThreads() {
+  const v = S.view;
+  if (!v) return;
+  try {
+    v.prThreads = await api("GET", `/api/worktrees/${v.wtId}/pr-threads`);
+    indexPRThreads();
+  } catch {
+  }
+}
+function syncPRThreads(wt) {
+  if (wt.pr?.state !== "OPEN") return Promise.resolve();
+  return api("POST", `/api/worktrees/${wt.id}/pr-threads/sync`).then((r) => {
+    if (S.view?.wtId !== wt.id) return;
+    S.view.prThreads = r;
+    indexPRThreads();
+  });
+}
+var where = (t) => {
+  const n = t.localLine ?? t.line ?? t.originalLine;
+  return `${t.file}${n ? `:${n}` : ""}`;
+};
+function msgHtml(t, i) {
+  const c = t.comments[i];
+  if (!c) return "";
+  const lead = i === 0 && t.title ? `<div class="cr-title">${md(t.title)}</div>` : "";
+  return `<div class="msg"><div class="msg-head"><strong class="${i === 0 ? "cr-name" : ""}">${esc(authorName(c.author))}</strong>
+      ${i === 0 && t.severity ? `<span class="sev ${esc(t.severity)}">${esc(t.severity)}</span>` : ""}
+      <a href="${esc(c.url)}" target="_blank" rel="noopener" class="muted">${ago(c.createdAt)}</a></div>
+    ${lead}${c.body && c.body !== t.title ? `<div class="msg-body">${md(c.body)}</div>` : ""}
+    ${i === 0 && t.suggestions ? `<details><summary>Suggested change</summary><pre class="suggestion">${esc(t.suggestions)}</pre></details>` : ""}
+    ${i === 0 && t.codegen ? `<details><summary>Fix guidance for agents</summary><div class="msg-body">${md(t.codegen)}</div></details>` : ""}</div>`;
+}
+function prThreadHtml(t, inline = false) {
+  const ek = `gh:${t.id}`;
+  const replying = S.editors.has(ek);
+  const claudeSaid = S.view?.prThreads?.claudeReplies[t.id];
+  const acts = [];
+  if (t.status === "open") acts.push(`<button class="btn small primary" data-act="pr-send" data-id="${esc(t.id)}">Send to Claude</button>`);
+  if (t.canReply && !replying) {
+    acts.push(`<button class="btn small" data-act="pr-reply" data-id="${esc(t.id)}">Reply on GitHub</button>`);
+    if (claudeSaid) acts.push(`<button class="btn small" data-act="pr-reply" data-id="${esc(t.id)}" data-claude="1" title="Start a GitHub reply from what Claude said about it">Reply with Claude's answer</button>`);
+  }
+  if (!t.isResolved && t.canResolve) acts.push(`<button class="btn small" data-act="pr-resolve" data-id="${esc(t.id)}" title="Resolve this conversation on GitHub">Resolve on GitHub</button>`);
+  if (t.isResolved && t.canUnresolve) acts.push(`<button class="btn small" data-act="pr-unresolve" data-id="${esc(t.id)}">Unresolve on GitHub</button>`);
+  if (t.status === "open") acts.push(`<button class="btn small" data-act="pr-dismiss" data-id="${esc(t.id)}" title="Hide it here; GitHub is left as it is">Dismiss</button>`);
+  if (t.status === "sent") acts.push('<span class="muted small">Added to your review as a draft</span>');
+  if (t.status === "dismissed") acts.push(`<span class="muted small">Dismissed</span><button class="link-btn" data-act="pr-restore" data-id="${esc(t.id)}">undo</button>`);
+  const tags = [
+    t.isResolved ? '<span class="status resolved">Resolved on GitHub</span>' : "",
+    t.isOutdated ? '<span class="status" title="The code it was left on has changed in the PR">Outdated</span>' : "",
+    !inline ? `<a href="#" class="mono" data-act="cr-jump" data-file="${esc(t.file)}" data-line="${t.localLine ?? ""}" data-id="${esc(t.id)}">${esc(where(t))}</a>` : ""
+  ].join("");
+  const shown = t.status === "open" || !inline ? t.comments.map((_, i) => msgHtml(t, i)) : [msgHtml(t, 0)];
+  return `<div class="thread cr-finding pr-thread ${colourOf(t)} ${t.status}${t.isResolved ? " resolved" : ""}"${inline ? ` id="fd-${esc(t.id)}"` : ""}>
+    ${tags ? `<div class="pr-tags">${tags}</div>` : ""}${shown.join("")}
+    ${replying ? `<div class="msg"><div class="editor"><textarea data-ek="${esc(ek)}" placeholder="Reply on GitHub, as you">${esc(S.editors.get(ek) || "")}</textarea>
+      <div class="actions"><span class="hint">Posted to the PR as you · ⌘↵ to post · Esc to cancel</span>
+        <button class="btn small" data-act="cancel-editor" data-ek="${esc(ek)}">Cancel</button>
+        <button class="btn small primary" data-act="save-editor" data-ek="${esc(ek)}">Post reply</button></div></div></div>` : ""}
+    <div class="thread-actions">${acts.join("")}</div></div>`;
+}
+function prPanelHtml(wt) {
+  const p = S.view?.prThreads;
+  if (!wt.pr || wt.pr.state !== "OPEN" || !p) return "";
+  const all = p.threads;
+  const open = all.filter((t) => !t.isResolved && t.status === "open");
+  const inDiff2 = (t) => !!S.view?.files.some((f) => f.path === t.file && !f.commit) && t.localLine !== null && S.view?.diff.mode !== "commits";
+  const loose = open.filter((t) => !inDiff2(t));
+  const shown = open.filter(inDiff2);
+  const done = all.filter((t) => t.isResolved || t.status !== "open");
+  const head = !p.fetchedAt ? `Comments on PR #${p.number}` : `PR #${p.number} · ${open.length ? `${open.length} open of ${all.length} thread${all.length === 1 ? "" : "s"}` : all.length ? "no open threads" : "no review comments yet"}`;
+  const facts = p.syncing ? "Checking GitHub…" : p.fetchedAt ? `checked ${ago(p.fetchedAt)}` : "";
+  return `<div class="panel cr-panel pr-panel github" id="pr-panel">
+    <div class="panel-head"><span>${head}</span><span class="actions"><span class="muted small">${facts}</span>
+      <a class="btn small" href="${esc(p.url || wt.pr.url)}/files" target="_blank" rel="noopener">Open on GitHub</a>
+      <button class="btn small" data-act="pr-sync" ${p.syncing ? "disabled" : ""}>Check now</button></span></div>
+    <div class="panel-body">
+      ${p.error ? `<p class="error">${esc(p.error)}</p>` : ""}
+      ${shown.length ? `<ul class="cr-index">${shown.map((t) => `<li><a href="#" class="cr-item" data-act="cr-jump" data-file="${esc(t.file)}" data-line="${t.localLine ?? ""}" data-id="${esc(t.id)}">
+        <span class="cr-line mono">${esc(where(t))}</span><strong>${esc(authorName(t.comments[0]?.author || ""))}</strong>
+        <span class="cr-item-title">${md(t.title || (t.comments[0]?.body || "").split("\n")[0] || "Comment")}</span></a></li>`).join("")}</ul>` : ""}
+      ${loose.length ? `<div class="cr-loose"><div class="muted small">Not on a line of this diff${S.view?.diff.mode === "commits" ? " view" : " (outdated, or the line has changed since)"}, so shown here:</div>
+        <div class="threads cr-list">${loose.map((t) => prThreadHtml(t)).join("")}</div></div>` : ""}
+      ${done.length ? `<details class="cr-done"><summary>${done.length} resolved, sent or dismissed</summary><div class="threads cr-list">${done.map((t) => prThreadHtml(t)).join("")}</div></details>` : ""}
+    </div></div>`;
+}
+
 // src/web/file.ts
 var commitClass = (n) => n === 0 ? "cu" : `c${(n - 1) % 8 + 1}`;
 var commitLabel = (n) => n === 0 ? "uncommitted" : `#${n}`;
@@ -499,7 +605,9 @@ function renderFile(f, byAnchor2) {
   const outsideComments = mine.filter((c) => !shown.has(keyOf(c.file, c.side, c.line, c.commit)));
   const fileFindings = f.commit ? [] : findingsOf(v).filter((x) => x.file === f.path && x.status === "open");
   const outsideFindings = fileFindings.filter((x) => !shown.has(keyOf(x.file, "new", x.endLine || x.startLine)));
-  const nOpen = mine.length + fileFindings.length;
+  const filePR = f.commit ? [] : openThreads(v).filter((t) => t.file === f.path && t.localLine !== null);
+  const outsidePR = filePR.filter((t) => !shown.has(keyOf(t.file, "new", t.localLine)));
+  const nOpen = mine.length + fileFindings.length + filePR.length;
   const touched = !f.commit ? fileCommitsOf(f.path) : [];
   const commitChips = touched.length && v.diff.commits.length ? touched.map((n) => `<span class="cchip ${commitClass(n)}" title="${esc(n ? `${commitByN(n)?.sha.slice(0, 8)} ${commitByN(n)?.subject || ""}` : "Not committed yet")}">${commitLabel(n)}</span>`).join("") : "";
   const head = `<div class="file-head">
@@ -516,12 +624,13 @@ function renderFile(f, byAnchor2) {
   else if (kind === "binary") body = '<div class="file-note">Binary file</div>';
   else if (kind === "empty") body = `<div class="file-note">${f.status === "renamed" ? "Renamed without changes" : "No content changes (mode change or empty file)"}</div>`;
   else if (kind === "large") body = `<div class="file-note">Large diff (${f.lineCount} lines). <button class="link-btn" data-act="force-render" data-file="${esc(f.uid)}">Load it</button></div>`;
-  else if (lazyPlaceholder(f, mine.length + fileFindings.length > 0 || [...S.editors.keys()].some((k) => k.startsWith(`new:${f.commit ? `${f.commit}~` : ""}${f.path}|`)))) {
+  else if (lazyPlaceholder(f, nOpen > 0 || [...S.editors.keys()].some((k) => k.startsWith(`new:${f.commit ? `${f.commit}~` : ""}${f.path}|`)))) {
     body = lazyPlaceholderHtml(f);
   } else body = rowsHtml(f, byAnchor2);
   const snippet = (line, text) => `<div class="outside-line"><span class="outside-no">${line ?? ""}</span><code>${text ? hl(text, lang) : '<span class="muted">(line not available)</span>'}</code></div>`;
   const outsideItems = [
     ...outsideFindings.map((x) => ({ line: x.startLine, html: snippet(x.startLine, x.snippet) + findingHtml(x, true) })),
+    ...outsidePR.map((t) => ({ line: t.localLine, html: prThreadHtml(t, true) })),
     ...outsideComments.map((c) => ({ line: c.line, html: snippet(c.line, c.lineText) + threadHtml(c) }))
   ].sort((a, b) => (a.line || 0) - (b.line || 0));
   const out = outsideItems.length && !collapsed ? `<div class="outdated"><div class="outdated-label">Not on a changed line, so shown here</div><div class="threads">${outsideItems.map((i) => i.html).join("")}</div></div>` : "";
@@ -553,10 +662,11 @@ function rowsHtml(f, byAnchor2) {
       }
       rows.push(`<tr class="line ${l.t}" data-k="${esc(k)}"${cAttr}>${blameCell}<td class="num" data-act="new-comment" data-k="${esc(k)}">${l.o ?? ""}</td><td class="num" data-act="new-comment" data-k="${esc(k)}">${l.n ?? ""}</td><td class="code">${cBar}<button class="add-c" data-act="new-comment" data-k="${esc(k)}" title="Comment on this line">+</button><span class="sign">${sign}</span>${hl(l.text, lang)}</td></tr>`);
       const crHere = side === "new" ? v.crByAnchor?.get(k) || [] : [];
+      const prHere = side === "new" && !f.commit ? v.prByAnchor?.get(k) || [] : [];
       const threads = byAnchor2.get(k) || [];
       const ek = `new:${k}`;
-      if (threads.length || crHere.length || S.editors.has(ek)) {
-        rows.push(`<tr class="thread-row"><td colspan="${span}"><div class="threads">${crHere.map((f2) => findingHtml(f2, true)).join("")}${threads.map(threadHtml).join("")}${S.editors.has(ek) ? editorHtml(ek, "Add comment") : ""}</div></td></tr>`);
+      if (threads.length || crHere.length || prHere.length || S.editors.has(ek)) {
+        rows.push(`<tr class="thread-row"><td colspan="${span}"><div class="threads">${prHere.map((t) => prThreadHtml(t, true)).join("")}${crHere.map((f2) => findingHtml(f2, true)).join("")}${threads.map(threadHtml).join("")}${S.editors.has(ek) ? editorHtml(ek, "Add comment") : ""}</div></td></tr>`);
       }
     }
   }
@@ -767,6 +877,7 @@ function wtItem(wt, showNew) {
     <div class="wt-sub">
       ${wt.sessions.map(sessionChip).join("")}${wt.agents.map(agentChip).join("")}${prChip(wt.pr)}
       ${nComments ? `<span class="chip comments">${nComments} comment${nComments === 1 ? "" : "s"}</span>` : ""}
+      ${wt.prThreads?.open ? `<span class="chip reviewer github" title="${wt.prThreads.open} unresolved review thread${wt.prThreads.open === 1 ? "" : "s"} on PR #${wt.prThreads.number} you haven't sent or dismissed">PR comments · ${wt.prThreads.open}</span>` : ""}
       ${wt.busy ? '<span class="chip busy-chip"><span class="dot busy"></span>removing…</span>' : ""}
       ${wt.error ? `<span class="chip closed" title="${esc(wt.error.message)}">${wt.error.kind === "broken-link" ? "broken link" : "can't read"}</span>` : wt.dirtyKind === "lockfile-only" ? '<span class="chip" title="Only a lockfile changed">lockfile changed</span>' : wt.dirtyKind === "deleted-only" ? `<span class="chip" title="Tracked files missing from disk; nothing is lost">${wt.dirty} missing</span>` : wt.dirty ? `<span class="chip" title="Uncommitted changes">${wt.dirty} uncommitted</span>` : ""}
       ${reviewChips(wt)}
@@ -1047,7 +1158,7 @@ async function loadView({ quiet = false } = {}) {
       files = parseDiff(diff.diff).map((f) => ({ ...f, commit: null, uid: f.path })).map((f, i) => ({ f, i, k: first(f.path) })).sort((a, b) => a.k - b.k || a.i - b.i).map((x) => x.f);
     }
     const prev = S.view;
-    const v = { wtId: wt.id, diff, files, groups, comments: cm.comments, reviews: cm.reviews, commentSig: wt.comments.sig, crSig: reviewsSig(wt), blame: prev?.wtId === wt.id && prev.blame?.fingerprint === diff.fingerprint ? prev.blame : null };
+    const v = { wtId: wt.id, diff, files, groups, comments: cm.comments, reviews: cm.reviews, commentSig: wt.comments.sig, crSig: reviewsSig(wt), prSig: prSig(wt), blame: prev?.wtId === wt.id && prev.blame?.fingerprint === diff.fingerprint ? prev.blame : null };
     S.view = v;
     if (diff.mode !== "commits" && !v.blame && diff.commits.length) {
       api("GET", `/api/worktrees/${wt.id}/blame`).then((b) => {
@@ -1057,7 +1168,7 @@ async function loadView({ quiet = false } = {}) {
       }, () => {
       });
     }
-    await loadCodeReviews();
+    await Promise.all([loadCodeReviews(), loadPRThreads()]);
     if (seq !== S.seq) return;
     S.stale = false;
     renderMain();
@@ -1083,6 +1194,8 @@ function select(id) {
   S.baseOther = null;
   const wt = S.st?.worktrees.find((w) => w.id === id);
   if (wt) loadBases(wt);
+  if (wt) syncPRThreads(wt).catch(() => {
+  });
   S.toggled.clear();
   S.forceRender.clear();
   S.editors.clear();
@@ -1310,6 +1423,7 @@ function renderMain() {
         <button class="btn" data-act="mark-reviewed" title="Remember this exact state so you can see only what changes next">Mark as reviewed</button>
       </div>
     </div>
+    ${prPanelHtml(wt)}
     ${reviewPanelsHtml(wt)}
     ${v.diff.mode !== "commits" && v.diff.truncated ? '<div class="callout warn">This diff is very large and was cut off.</div>' : ""}
     ${orphanPanel}
@@ -1710,6 +1824,13 @@ async function saveEditor(ek) {
     await api("PATCH", `/api/comments/${rest}`, { body: text });
   } else if (kind === "reply") {
     await api("POST", `/api/comments/${rest}/reply`, { body: text, author: "you" });
+  } else if (kind === "gh") {
+    await api("POST", `/api/pr-threads/${rest}/reply`, { body: text });
+    S.editors.delete(ek);
+    toast("Reply posted on GitHub");
+    await loadPRThreads();
+    renderMain();
+    return;
   }
   S.editors.delete(ek);
   await reloadComments();
@@ -2076,6 +2197,50 @@ Their folders are deleted. ${merged ? `${merged} merged branch${merged === 1 ? "
     await loadCodeReviews();
     await reloadComments();
   },
+  "pr-send": async (el) => {
+    await api("POST", `/api/pr-threads/${attr(el, "id")}/send`);
+    await loadPRThreads();
+    await reloadComments();
+  },
+  "pr-dismiss": async (el) => {
+    await api("POST", `/api/pr-threads/${attr(el, "id")}/dismiss`);
+    await loadPRThreads();
+    renderMain();
+  },
+  "pr-restore": async (el) => {
+    await api("POST", `/api/pr-threads/${attr(el, "id")}/restore`);
+    await loadPRThreads();
+    renderMain();
+  },
+  "pr-reply": (el) => {
+    const ek = `gh:${attr(el, "id")}`;
+    S.editors.set(ek, el.dataset.claude ? view().prThreads?.claudeReplies[attr(el, "id")] ?? "" : "");
+    S.focusEk = ek;
+    renderMain();
+  },
+  "pr-resolve": async (el) => {
+    await api("POST", `/api/pr-threads/${attr(el, "id")}/resolve`);
+    toast("Resolved on GitHub");
+    await loadPRThreads();
+    renderMain();
+  },
+  "pr-unresolve": async (el) => {
+    await api("POST", `/api/pr-threads/${attr(el, "id")}/unresolve`);
+    await loadPRThreads();
+    renderMain();
+  },
+  "pr-sync": async () => {
+    const wt = curWt();
+    if (!wt) return;
+    const p = view().prThreads;
+    if (p) p.syncing = true;
+    renderMain();
+    try {
+      await syncPRThreads(wt);
+    } finally {
+      renderMain();
+    }
+  },
   "cr-jump": (el, e) => {
     e.preventDefault();
     const f = view().files.find((x) => x.path === attr(el, "file") && !x.commit);
@@ -2247,6 +2412,19 @@ function onState(st2) {
         cur.commentSig = wt.comments.sig;
         reloadComments();
       } else renderMain();
+    });
+  } else if (prSig(wt) !== v.prSig) {
+    const before = v.prThreads?.threads.length ?? 0;
+    v.prSig = prSig(wt);
+    loadPRThreads().then(() => {
+      const cur = S.view;
+      if (cur !== v) return;
+      const n = (cur.prThreads?.threads.length ?? 0) - before;
+      if (n > 0 && before) toast(`${n} new comment thread${n === 1 ? "" : "s"} on PR #${wt.pr?.number}`);
+      if (wt.comments.sig !== cur.commentSig) {
+        cur.commentSig = wt.comments.sig;
+        reloadComments();
+      } else if (!document.activeElement?.matches("textarea")) renderMain();
     });
   } else if (wt.comments.sig !== v.commentSig) {
     v.commentSig = wt.comments.sig;

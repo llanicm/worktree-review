@@ -1,12 +1,12 @@
 // Generated from src/ by build.mjs. Edit the TypeScript source, not this file.
 
 // src/server/main.ts
-import fs15 from "node:fs";
+import fs16 from "node:fs";
 
 // src/server/http.ts
-import fs14 from "node:fs";
+import fs15 from "node:fs";
 import http from "node:http";
-import path11 from "node:path";
+import path12 from "node:path";
 
 // src/server/exec.ts
 import { execFile } from "node:child_process";
@@ -209,7 +209,8 @@ function loadState() {
     reviews: Array.isArray(o.reviews) ? o.reviews : [],
     cleaned: Array.isArray(o.cleaned) ? o.cleaned : [],
     trash: Array.isArray(o.trash) ? o.trash : [],
-    codeReviews: isRecord(o.codeReviews) ? o.codeReviews : fromCodeRabbit(o.coderabbit)
+    codeReviews: isRecord(o.codeReviews) ? o.codeReviews : fromCodeRabbit(o.coderabbit),
+    prThreads: isRecord(o.prThreads) ? o.prThreads : {}
   };
   if (typeof o.onboardedAt === "number" || o.onboardedAt === null) state2.onboardedAt = o.onboardedAt;
   else if (state2.comments.length || state2.cleaned.length || Object.values(state2.worktrees).some((w) => w.reviewedAt)) state2.onboardedAt = Date.now();
@@ -924,23 +925,360 @@ function startJob(kind, title, items, worker) {
   return job;
 }
 
-// src/server/removal.ts
-import { spawn as spawn3 } from "node:child_process";
-import fs9 from "node:fs";
-import path6 from "node:path";
-
-// src/server/sessions.ts
+// src/server/pr-threads.ts
 import fs8 from "node:fs";
 import path5 from "node:path";
+var CHECK_MS = 6e4;
+var BURST_MS = 2e4;
+var BURST_FOR = 10 * 6e4;
+var REFETCH_MS = 10 * 6e4;
+var CODERABBIT = "coderabbitai";
+var burstUntil = 0;
+var syncInterval = () => Date.now() < burstUntil ? BURST_MS : CHECK_MS;
+var syncing = /* @__PURE__ */ new Set();
+async function gql(query, vars = {}) {
+  const args = ["api", "graphql", "-f", `query=${query}`];
+  for (const [k, v] of Object.entries(vars)) args.push(typeof v === "number" ? "-F" : "-f", `${k}=${v}`);
+  let out;
+  try {
+    out = await run("gh", args);
+  } catch (e) {
+    const { stdout, stderr, message, code } = errInfo(e);
+    if (code === "ENOENT") throw new Error("Install the GitHub CLI (gh) to see PR comments.");
+    const reply2 = rec(safeJson(stdout));
+    const msg = Array.isArray(reply2.errors) ? asStr(rec(reply2.errors[0]).message) : void 0;
+    throw new Error(msg || firstLine(stderr.trim()) || firstLine(message));
+  }
+  const reply = rec(safeJson(out));
+  if (Array.isArray(reply.errors) && reply.errors.length) throw new Error(asStr(rec(reply.errors[0]).message) || "GitHub returned an error.");
+  return rec(reply.data);
+}
+function safeJson(s) {
+  try {
+    return JSON.parse(s);
+  } catch {
+    return null;
+  }
+}
+var COMMENT_FIELDS = "id body createdAt url author { login __typename }";
+var THREAD_FIELDS = `id path line startLine originalLine diffSide isResolved isOutdated viewerCanResolve viewerCanUnresolve viewerCanReply
+  comments(first: 50) { nodes { ${COMMENT_FIELDS} } }`;
+var nodesOf = (v) => {
+  const n = rec(v).nodes;
+  return Array.isArray(n) ? n : [];
+};
+var numOrNull = (v) => typeof v === "number" ? v : null;
+var stripAll = (s, re) => {
+  for (let prev = ""; prev !== s; ) {
+    prev = s;
+    s = s.replace(re, "");
+  }
+  return s;
+};
+var stripHtmlComments = (s) => stripAll(s, /<!--[\s\S]*?-->/g).trim();
+function parseComment(v) {
+  const c = rec(v);
+  const author = rec(c.author);
+  if (typeof c.id !== "string" || typeof c.body !== "string") return [];
+  return [{
+    id: c.id,
+    author: asStr(author.login) || "ghost",
+    bot: author.__typename === "Bot",
+    body: stripHtmlComments(c.body),
+    createdAt: Date.parse(asStr(c.createdAt) || "") || 0,
+    url: asStr(c.url) || ""
+  }];
+}
+var unfence = (s) => s.trim().replace(/^```[\w-]*\n?/, "").replace(/\n?```$/, "").trim();
+function parseCodeRabbit(body) {
+  const details = [...body.matchAll(/<details>\s*<summary>([\s\S]*?)<\/summary>([\s\S]*?)<\/details>/g)].map((m) => ({ summary: m[1] ?? "", text: m[2] ?? "" }));
+  const block = (re) => unfence(details.find((d) => re.test(d.summary))?.text ?? "");
+  let head = body.split(/<details>/)[0] ?? "";
+  const tag = head.match(/^\s*_[^\n]*_\s*(?:\n|$)/);
+  const severity = (tag?.[0].match(/(?<![a-z])(Critical|Major|Minor|Trivial)(?![a-z])/i)?.[1] ?? "info").toLowerCase();
+  if (tag) head = head.slice(tag[0].length);
+  const title = head.match(/^\s*\*\*([\s\S]+?)\*\*/);
+  if (title) head = head.slice((title.index ?? 0) + title[0].length);
+  return {
+    severity,
+    title: title?.[1]?.trim() ?? "",
+    comment: stripAll(head, /<\/?[a-z][^>]*>/gi).trim(),
+    suggestions: block(/Committable suggestion/i) || block(/Proposed fix|Suggested fix/i),
+    codegen: block(/Prompt for AI Agents/i)
+  };
+}
+function parseThread(v, prev) {
+  const t = rec(v);
+  if (typeof t.id !== "string" || typeof t.path !== "string") return null;
+  const comments = nodesOf(t.comments).flatMap(parseComment);
+  const first = comments[0];
+  if (!first) return null;
+  let extra = {};
+  if (first.author === CODERABBIT) {
+    const { comment, ...rest } = parseCodeRabbit(first.body);
+    extra = rest;
+    first.body = comment || rest.title || first.body;
+  }
+  return {
+    id: t.id,
+    file: t.path,
+    side: t.diffSide === "LEFT" ? "old" : "new",
+    line: numOrNull(t.line),
+    startLine: numOrNull(t.startLine),
+    originalLine: numOrNull(t.originalLine),
+    localLine: prev?.localLine ?? null,
+    isResolved: t.isResolved === true,
+    isOutdated: t.isOutdated === true,
+    canResolve: t.viewerCanResolve === true,
+    canUnresolve: t.viewerCanUnresolve === true,
+    canReply: t.viewerCanReply === true,
+    comments,
+    ...extra,
+    status: prev?.status ?? "open",
+    commentId: prev?.commentId
+  };
+}
+async function fetchThreads(wt) {
+  const repo = repos.get(wt.repoKey);
+  const pr = wt.pr;
+  if (!repo?.gh || !pr) return;
+  const old = state.prThreads[wt.id];
+  const r = old && old.number === pr.number ? old : { number: pr.number, url: pr.url, updatedAt: null, headRefOid: null, fetchedAt: null, error: null, threads: [] };
+  state.prThreads[wt.id] = r;
+  syncing.add(wt.id);
+  changed();
+  const query = `query($owner: String!, $name: String!, $number: Int!, $after: String) {
+    repository(owner: $owner, name: $name) { pullRequest(number: $number) { url updatedAt headRefOid
+      reviewThreads(first: 100, after: $after) { pageInfo { hasNextPage endCursor } nodes { ${THREAD_FIELDS} } } } } }`;
+  try {
+    const prev = new Map(r.threads.map((t) => [t.id, t]));
+    const threads = [];
+    let after = null, meta = {};
+    for (let page = 0; page < 10; page++) {
+      const vars = { owner: repo.gh.owner, name: repo.gh.name, number: pr.number };
+      if (after) vars.after = after;
+      meta = rec(rec((await gql(query, vars)).repository).pullRequest);
+      const conn = rec(meta.reviewThreads);
+      for (const n of nodesOf(conn)) {
+        const t = parseThread(n, prev.get(asStr(rec(n).id) ?? ""));
+        if (t) threads.push(t);
+      }
+      const info = rec(conn.pageInfo);
+      after = info.hasNextPage === true ? asStr(info.endCursor) ?? null : null;
+      if (!after) break;
+    }
+    r.threads = threads;
+    r.url = asStr(meta.url) || r.url;
+    r.updatedAt = asStr(meta.updatedAt) ?? null;
+    r.headRefOid = asStr(meta.headRefOid) ?? null;
+    r.fetchedAt = Date.now();
+    r.error = null;
+    await mapLines(wt, r);
+  } catch (e) {
+    r.error = `Couldn't fetch the PR's comments: ${errInfo(e).message}`;
+    log(`PR threads fetch failed for ${wt.path}:`, r.error);
+  } finally {
+    syncing.delete(wt.id);
+    save();
+    changed();
+  }
+}
+async function syncPRThreads() {
+  for (const repo of repos.values()) {
+    if (!repo.gh) continue;
+    const open = [...wts.values()].filter((w) => w.repoKey === repo.commonDir && w.pr?.state === "OPEN");
+    if (!open.length) continue;
+    const aliases = open.map((w, i) => `p${i}: pullRequest(number: ${w.pr?.number}) { updatedAt headRefOid }`).join("\n");
+    let data;
+    try {
+      data = rec((await gql(`query { repository(owner: ${JSON.stringify(repo.gh.owner)}, name: ${JSON.stringify(repo.gh.name)}) { ${aliases} } }`)).repository);
+    } catch (e) {
+      log(`PR threads check failed for ${repo.name}:`, errInfo(e).message);
+      continue;
+    }
+    for (const [i, wt] of open.entries()) {
+      const now = rec(data[`p${i}`]);
+      const r = state.prThreads[wt.id];
+      const head = asStr(now.headRefOid) ?? null;
+      if (r?.headRefOid && head && r.headRefOid !== head) burstUntil = Date.now() + BURST_FOR;
+      const stale = !r || r.number !== wt.pr?.number || r.updatedAt !== (asStr(now.updatedAt) ?? null) || r.headRefOid !== head || !r.fetchedAt || Date.now() - r.fetchedAt > REFETCH_MS;
+      if (stale && !syncing.has(wt.id)) await fetchThreads(wt);
+    }
+  }
+}
+async function syncWorktree(wt) {
+  if (wt.pr?.state !== "OPEN") throw httpError(409, "This worktree has no open PR.");
+  if (!syncing.has(wt.id)) await fetchThreads(wt);
+}
+function hunksByFile(diff) {
+  const out = /* @__PURE__ */ new Map();
+  let from = "", cur = null;
+  for (const l of diff.split("\n")) {
+    if (l.startsWith("--- ")) {
+      from = l.slice(4).replace(/^a\//, "");
+      cur = null;
+      continue;
+    }
+    if (l.startsWith("+++ ")) {
+      cur = l === "+++ /dev/null" ? null : [];
+      out.set(l === "+++ /dev/null" ? from : l.slice(4).replace(/^b\//, ""), cur);
+      continue;
+    }
+    const m = cur && l.match(/^@@ -(\d+)(?:,(\d+))? \+\d+(?:,(\d+))? @@/);
+    if (cur && m) cur.push([Number(m[1]), m[2] === void 0 ? 1 : Number(m[2]), m[3] === void 0 ? 1 : Number(m[3])]);
+  }
+  return out;
+}
+function shiftLine(n, hunks) {
+  let off = 0;
+  for (const [a = 0, b = 0, d = 0] of hunks) {
+    if (b === 0) {
+      if (n > a) off += d;
+      else break;
+    } else if (n < a) break;
+    else if (n < a + b) return null;
+    else off += d - b;
+  }
+  return n + off;
+}
+async function mapLines(wt, r) {
+  r.mappedFp = wt.fingerprint;
+  const placed = r.threads.filter((t) => t.side === "new" && t.line);
+  for (const t of r.threads) t.localLine = null;
+  if (!placed.length || !r.headRefOid) return;
+  const files = [...new Set(placed.map((t) => t.file))];
+  let diff;
+  try {
+    diff = await git(wt.path, ["diff", "-U0", "--no-color", "--no-ext-diff", "--no-renames", r.headRefOid, "--", ...files]);
+  } catch {
+    if (wt.head === r.headRefOid) for (const t of placed) t.localLine = t.line;
+    return;
+  }
+  const hunks = hunksByFile(diff);
+  for (const t of placed) {
+    const h = hunks.get(t.file);
+    if (t.line !== null && h !== null) t.localLine = h ? shiftLine(t.line, h) : t.line;
+  }
+}
+function prThreadsSummary(wt) {
+  const r = state.prThreads[wt.id];
+  if (!r || wt.pr?.number !== r.number) return null;
+  const isSyncing = syncing.has(wt.id);
+  return {
+    number: r.number,
+    open: r.threads.filter((t) => !t.isResolved && t.status === "open").length,
+    total: r.threads.length,
+    syncing: isSyncing,
+    error: r.error,
+    sig: sha1(JSON.stringify([isSyncing, r.error, r.fetchedAt, r.threads.map((t) => [t.id, t.isResolved, t.status, t.comments.length, t.localLine])])).slice(0, 10)
+  };
+}
+async function getPRThreads(wt) {
+  const r = state.prThreads[wt.id];
+  if (!r || wt.pr?.number !== r.number) {
+    return { number: wt.pr?.number ?? 0, url: wt.pr?.url ?? "", fetchedAt: null, syncing: syncing.has(wt.id), error: null, threads: [], claudeReplies: {} };
+  }
+  if (r.mappedFp !== wt.fingerprint && r.fetchedAt) {
+    await mapLines(wt, r);
+    changed();
+  }
+  const claudeReplies = {};
+  for (const t of r.threads) {
+    const c = t.commentId ? state.comments.find((x) => x.id === t.commentId) : void 0;
+    const reply = c?.replies.filter((x) => x.author !== "you").pop();
+    if (reply) claudeReplies[t.id] = reply.body;
+  }
+  return { number: r.number, url: r.url, fetchedAt: r.fetchedAt, syncing: syncing.has(wt.id), error: r.error, threads: r.threads, claudeReplies };
+}
+function getThread(id) {
+  for (const [wtId, r] of Object.entries(state.prThreads)) {
+    const thread = r.threads.find((t) => t.id === id);
+    if (thread) return { wt: getWt(wtId), r, thread };
+  }
+  throw httpError(404, "Unknown PR thread");
+}
+async function replyToThread(id, body) {
+  const { thread } = getThread(id);
+  if (!body.trim()) throw httpError(400, "Empty reply");
+  const data = await gql(
+    `mutation($id: ID!, $body: String!) {
+    addPullRequestReviewThreadReply(input: { pullRequestReviewThreadId: $id, body: $body }) { comment { ${COMMENT_FIELDS} } } }`,
+    { id: thread.id, body: body.trim() }
+  ).catch((e) => {
+    throw httpError(502, `GitHub didn't take the reply: ${errInfo(e).message}`);
+  });
+  thread.comments.push(...parseComment(rec(rec(data.addPullRequestReviewThreadReply).comment)));
+  save();
+  changed();
+  return thread;
+}
+async function setResolved(id, resolved) {
+  const { thread } = getThread(id);
+  const op = resolved ? "resolveReviewThread" : "unresolveReviewThread";
+  const data = await gql(`mutation($id: ID!) { ${op}(input: { threadId: $id }) { thread { isResolved } } }`, { id: thread.id }).catch((e) => {
+    throw httpError(502, `GitHub didn't ${resolved ? "resolve" : "unresolve"} it: ${errInfo(e).message}`);
+  });
+  thread.isResolved = rec(rec(data[op]).thread).isResolved === true;
+  save();
+  changed();
+  return thread;
+}
+var who = (login) => login === CODERABBIT ? "CodeRabbit" : `@${login}`;
+function threadToComment(wt, r, t) {
+  const [first, ...rest] = t.comments;
+  const parts = [`**${first ? who(first.author) : "A reviewer"} on PR #${r.number}${t.severity ? ` (${t.severity})` : ""}${t.title ? `: ${t.title}` : ""}**`];
+  if (first?.body && first.body !== t.title) parts.push(first.body);
+  if (t.suggestions) parts.push(`Suggested change:
+\`\`\`
+${t.suggestions}
+\`\`\``);
+  if (t.codegen) parts.push(`Fix guidance from CodeRabbit:
+${t.codegen}`);
+  if (rest.length) parts.push(`Replies on GitHub:
+${rest.map((c2) => `> ${who(c2.author)}: ${c2.body.replace(/\n/g, "\n> ")}`).join("\n>\n")}`);
+  if (t.localLine === null) parts.push(`(On ${t.file}${t.line || t.originalLine ? ` line ${t.line ?? t.originalLine} of the PR` : ""}; that line has changed here since.)`);
+  const line = t.localLine ?? t.line ?? t.originalLine ?? 1;
+  const c = {
+    id: newId("c"),
+    wtId: wt.id,
+    wtPath: wt.path,
+    file: t.file,
+    line,
+    side: "new",
+    lineText: "",
+    body: parts.join("\n\n"),
+    status: "draft",
+    createdAt: Date.now(),
+    replies: [],
+    fromThread: t.id
+  };
+  try {
+    c.lineText = fs8.readFileSync(path5.join(wt.path, t.file), "utf8").split("\n")[line - 1] ?? "";
+  } catch {
+  }
+  state.comments.push(c);
+  t.status = "sent";
+  t.commentId = c.id;
+  return c;
+}
+
+// src/server/removal.ts
+import { spawn as spawn3 } from "node:child_process";
+import fs10 from "node:fs";
+import path7 from "node:path";
+
+// src/server/sessions.ts
+import fs9 from "node:fs";
+import path6 from "node:path";
 var transcriptCache = /* @__PURE__ */ new Map();
 function findTranscript(sessionId) {
   const cached = transcriptCache.get(sessionId);
   if (cached) return cached;
-  const projects = path5.join(CLAUDE_DIR, "projects");
+  const projects = path6.join(CLAUDE_DIR, "projects");
   try {
-    for (const d of fs8.readdirSync(projects)) {
-      const p = path5.join(projects, d, `${sessionId}.jsonl`);
-      if (fs8.existsSync(p)) {
+    for (const d of fs9.readdirSync(projects)) {
+      const p = path6.join(projects, d, `${sessionId}.jsonl`);
+      if (fs9.existsSync(p)) {
         transcriptCache.set(sessionId, p);
         return p;
       }
@@ -950,15 +1288,15 @@ function findTranscript(sessionId) {
   return null;
 }
 function readTail(p, bytes) {
-  const fd = fs8.openSync(p, "r");
+  const fd = fs9.openSync(p, "r");
   try {
-    const size = fs8.fstatSync(fd).size;
+    const size = fs9.fstatSync(fd).size;
     const len = Math.min(size, bytes);
     const buf = Buffer.alloc(len);
-    fs8.readSync(fd, buf, 0, len, size - len);
+    fs9.readSync(fd, buf, 0, len, size - len);
     return buf.toString("utf8");
   } finally {
-    fs8.closeSync(fd);
+    fs9.closeSync(fd);
   }
 }
 var EDIT_TOOLS = /* @__PURE__ */ new Set(["Edit", "MultiEdit", "Write", "NotebookEdit"]);
@@ -1029,22 +1367,22 @@ var discoverSoon = () => {
   });
 };
 function refreshAgents(s, transcript, paths, ownPath) {
-  const dir = path5.join(path5.dirname(transcript), s.sessionId, "subagents");
+  const dir = path6.join(path6.dirname(transcript), s.sessionId, "subagents");
   let files = [];
   try {
-    files = fs8.readdirSync(dir).filter((f) => f.endsWith(".meta.json"));
+    files = fs9.readdirSync(dir).filter((f) => f.endsWith(".meta.json"));
   } catch {
     return [];
   }
   const result = [];
   for (const f of files) {
-    const meta = parseAgentMeta(loadJson(path5.join(dir, f), null));
+    const meta = parseAgentMeta(loadJson(path6.join(dir, f), null));
     if (!meta || meta.finished) continue;
     const agentId = f.slice(0, -".meta.json".length).replace(/^agent-/, "");
-    const tp = path5.join(dir, f.slice(0, -".meta.json".length) + ".jsonl");
+    const tp = path6.join(dir, f.slice(0, -".meta.json".length) + ".jsonl");
     let size, mtime;
     try {
-      ({ size, mtimeMs: mtime } = fs8.statSync(tp));
+      ({ size, mtimeMs: mtime } = fs9.statSync(tp));
     } catch {
       continue;
     }
@@ -1067,16 +1405,16 @@ function refreshAgents(s, transcript, paths, ownPath) {
   return result;
 }
 function refreshSessions() {
-  const dir = path5.join(CLAUDE_DIR, "sessions");
+  const dir = path6.join(CLAUDE_DIR, "sessions");
   const live = /* @__PURE__ */ new Set();
   let files = [];
   try {
-    files = fs8.readdirSync(dir).filter((f) => f.endsWith(".json"));
+    files = fs9.readdirSync(dir).filter((f) => f.endsWith(".json"));
   } catch {
   }
   const paths = [...wts.values()].map((w) => w.path);
   for (const f of files) {
-    const info = parseSessionInfo(loadJson(path5.join(dir, f), null));
+    const info = parseSessionInfo(loadJson(path6.join(dir, f), null));
     if (!info || !pidAlive(info.pid) || reviewerPids.has(info.pid)) continue;
     live.add(info.sessionId);
     let s = sessions.get(info.sessionId);
@@ -1089,7 +1427,7 @@ function refreshSessions() {
     const tp = findTranscript(s.sessionId);
     if (tp) {
       try {
-        const size = fs8.statSync(tp).size;
+        const size = fs9.statSync(tp).size;
         if (size !== s.scannedSize && Date.now() - s.scannedAt > 8e3) {
           s.scannedSize = size;
           s.scannedAt = Date.now();
@@ -1169,7 +1507,7 @@ async function removeWorktree(wt, how, { force = false } = {}) {
   changed();
 }
 async function detachWorktree(wt, repo, { force }) {
-  if (fs9.existsSync(path6.join(wt.path, ".gitmodules"))) {
+  if (fs10.existsSync(path7.join(wt.path, ".gitmodules"))) {
     try {
       await run("git", ["worktree", "remove", ...force ? ["--force"] : [], wt.path], { cwd: repo.root });
     } catch (e) {
@@ -1181,9 +1519,9 @@ async function detachWorktree(wt, repo, { force }) {
     const entries = parseStatus(await git(wt.path, ["status", "--porcelain=v1", "-z"]));
     if (entries.length) throw httpError(409, `Git found ${entries.length} modified or untracked file${entries.length === 1 ? "" : "s"} in it just now, so it wasn't removed.`);
   }
-  const aside = path6.join(path6.dirname(wt.path), `.${path6.basename(wt.path)}.removing-${Date.now()}`);
+  const aside = path7.join(path7.dirname(wt.path), `.${path7.basename(wt.path)}.removing-${Date.now()}`);
   try {
-    fs9.renameSync(wt.path, aside);
+    fs10.renameSync(wt.path, aside);
   } catch (e) {
     const { code, message } = errInfo(e);
     if (code !== "EXDEV") throw httpError(409, `Couldn't move it aside to delete it: ${message}`);
@@ -1201,7 +1539,7 @@ function deleteInBackground(p) {
     save();
   };
   if (process.platform === "win32") {
-    fs9.promises.rm(p, { recursive: true, force: true, maxRetries: 3 }).then(done, (e) => log("background delete failed", p, errInfo(e).message));
+    fs10.promises.rm(p, { recursive: true, force: true, maxRetries: 3 }).then(done, (e) => log("background delete failed", p, errInfo(e).message));
     return;
   }
   const child = spawn3("rm", ["-rf", p], { detached: true, stdio: "ignore" });
@@ -1347,7 +1685,8 @@ function publicWorktree(wt) {
       waiting: mine.filter((c) => c.status === "pending").length,
       open: mine.filter((c) => c.status === "delivered").length,
       sig: sha1(mine.map((c) => `${c.id}${c.status}${c.replies.length}${c.body.length}`).join() + state.reviews.filter((r) => r.wtId === wt.id).map((r) => r.status).join()).slice(0, 10)
-    }
+    },
+    prThreads: prThreadsSummary(wt)
   };
 }
 function publicState() {
@@ -1397,15 +1736,15 @@ data: ${json}
 }
 
 // src/server/routes.ts
-import fs13 from "node:fs";
+import fs14 from "node:fs";
 
 // src/server/claude-review.ts
-import path8 from "node:path";
+import path9 from "node:path";
 
 // src/server/code-review.ts
 import { spawn as spawn4 } from "node:child_process";
-import fs10 from "node:fs";
-import path7 from "node:path";
+import fs11 from "node:fs";
+import path8 from "node:path";
 var REVIEWER_NAMES = { coderabbit: "CodeRabbit", claude: "Claude" };
 var isReviewer = (v) => v === "coderabbit" || v === "claude";
 var children = /* @__PURE__ */ new Map();
@@ -1452,7 +1791,7 @@ function startInBackground(wt, review, setUp, run2) {
 }
 function addSnippet(wt, f) {
   try {
-    const lines = fs10.readFileSync(path7.join(wt.path, f.file), "utf8").split("\n");
+    const lines = fs11.readFileSync(path8.join(wt.path, f.file), "utf8").split("\n");
     if (f.startLine) f.snippet = lines.slice(f.startLine - 1, Math.min(f.endLine || f.startLine, f.startLine + 4)).join("\n");
   } catch {
   }
@@ -1558,7 +1897,7 @@ ${f.codegen}`);
     fromFinding: f.id
   };
   try {
-    const text = fs10.readFileSync(path7.join(wt.path, f.file), "utf8").split("\n");
+    const text = fs11.readFileSync(path8.join(wt.path, f.file), "utf8").split("\n");
     c.lineText = text[(c.line || 1) - 1] ?? "";
   } catch {
   }
@@ -1598,7 +1937,7 @@ var reviewerEnv = () => Object.fromEntries(Object.entries(process.env).filter(([
 function activity(wt, name, input) {
   const file = asStr(input.file_path);
   if (name === "Skill") return "Starting the review";
-  if (name === "Read" && file) return `Reading ${path8.relative(wt.path, path8.resolve(wt.path, file))}`;
+  if (name === "Read" && file) return `Reading ${path9.relative(wt.path, path9.resolve(wt.path, file))}`;
   if (name === "Bash") return asStr(input.description) || "Running a command";
   if (name === "Grep" || name === "Glob") return "Searching the code";
   if (name === "Task" || name === "Agent") return asStr(input.description) || "Starting a sub-agent";
@@ -1614,7 +1953,7 @@ function toFinding(wt, v) {
     id: newId("f"),
     source: "claude",
     severity: SEVERITIES2.includes(severity) ? severity : "info",
-    file: path8.isAbsolute(raw) ? path8.relative(wt.path, raw) : raw,
+    file: path9.isAbsolute(raw) ? path9.relative(wt.path, raw) : raw,
     startLine: start,
     endLine: Number(o.endLine) || start,
     title: asStr(o.title) || "",
@@ -1745,16 +2084,16 @@ function runCodeRabbit(wt, review) {
 }
 
 // src/server/diffs.ts
-import fs11 from "node:fs";
-import path9 from "node:path";
+import fs12 from "node:fs";
+import path10 from "node:path";
 async function snapshotTree(wt) {
   if (wt.snap && wt.snap.fp === wt.fingerprint) return wt.snap.tree;
   const fp = wt.fingerprint;
-  const index = path9.resolve(wt.path, (await git(wt.path, ["rev-parse", "--git-path", "index"])).trim());
-  const tmp = path9.join(TMP_DIR, `${wt.id}-${Date.now()}.index`);
+  const index = path10.resolve(wt.path, (await git(wt.path, ["rev-parse", "--git-path", "index"])).trim());
+  const tmp = path10.join(TMP_DIR, `${wt.id}-${Date.now()}.index`);
   try {
     try {
-      fs11.copyFileSync(index, tmp);
+      fs12.copyFileSync(index, tmp);
     } catch {
     }
     const env = { GIT_INDEX_FILE: tmp };
@@ -1763,8 +2102,8 @@ async function snapshotTree(wt) {
     wt.snap = { fp, tree };
     return tree;
   } finally {
-    fs11.rmSync(tmp, { force: true });
-    fs11.rmSync(tmp + ".lock", { force: true });
+    fs12.rmSync(tmp, { force: true });
+    fs12.rmSync(tmp + ".lock", { force: true });
   }
 }
 function memo(wt, key, fn) {
@@ -1810,9 +2149,9 @@ async function blameWorktree(wt, mergeBase, files, commits) {
   const byShaN = new Map(commits.map((c) => [c.sha, c.n]));
   const result = {};
   await Promise.all(files.slice(0, 200).map(async (file) => {
-    const abs = path9.join(wt.path, file);
+    const abs = path10.join(wt.path, file);
     try {
-      if (fs11.statSync(abs).size > 2 * 1024 * 1024) return;
+      if (fs12.statSync(abs).size > 2 * 1024 * 1024) return;
     } catch {
       return;
     }
@@ -1933,11 +2272,11 @@ async function getDiff(wt, mode) {
 var UNCOMMITTED = "0".repeat(40);
 async function getFileBlame(wt, file) {
   await refreshWorktree(wt);
-  const abs = path9.resolve(wt.path, file);
-  if (!file || !abs.startsWith(wt.path + path9.sep)) throw httpError(400, "Not a file in this worktree");
+  const abs = path10.resolve(wt.path, file);
+  if (!file || !abs.startsWith(wt.path + path10.sep)) throw httpError(400, "Not a file in this worktree");
   let size;
   try {
-    size = fs11.statSync(abs).size;
+    size = fs12.statSync(abs).size;
   } catch {
     throw httpError(404, `${file} isn't in the worktree`);
   }
@@ -1955,8 +2294,8 @@ async function getFileBlame(wt, file) {
     } catch {
     }
     if (out === null) {
-      const lines = fs11.readFileSync(abs, "utf8").split("\n").length;
-      info[UNCOMMITTED] = { sha: UNCOMMITTED, author: "You", time: fs11.statSync(abs).mtimeMs, summary: "Not committed yet", n: 0 };
+      const lines = fs12.readFileSync(abs, "utf8").split("\n").length;
+      info[UNCOMMITTED] = { sha: UNCOMMITTED, author: "You", time: fs12.statSync(abs).mtimeMs, summary: "Not committed yet", n: 0 };
       runs.push([1, Math.max(1, lines - 1), UNCOMMITTED]);
       return { file, fingerprint: fp, commits: info, runs };
     }
@@ -2066,8 +2405,8 @@ function claimReviews({ session_id, cwd }) {
 }
 
 // src/server/settings.ts
-import fs12 from "node:fs";
-import path10 from "node:path";
+import fs13 from "node:fs";
+import path11 from "node:path";
 var isIntIn = (v, min, max) => Number.isInteger(v) && v >= min && v <= max;
 async function updateConfig(body) {
   const patch = isRecord(body) ? body : {};
@@ -2078,7 +2417,7 @@ async function updateConfig(body) {
         errors.push(`Invalid value for ${k}`);
         continue;
       }
-      const missing = v.filter((p) => !fs12.existsSync(expand(p.trim())));
+      const missing = v.filter((p) => !fs13.existsSync(expand(p.trim())));
       if (missing.length) {
         errors.push(`Folder not found: ${missing.join(", ")}`);
         continue;
@@ -2117,29 +2456,29 @@ async function updateConfig(body) {
     }
   }
   if (errors.length) throw httpError(400, errors.join("; "));
-  fs12.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n");
+  fs13.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n");
   if ("roots" in patch || "extraRepos" in patch) await discoverWorktrees();
   changed();
 }
 var SKIP_DIRS = /* @__PURE__ */ new Set(["node_modules", ".git", ".Trash", "Library", ".cache", ".npm", ".pnpm-store"]);
 function listDir(p, showHidden) {
-  const full = path10.resolve(expand(p || "~"));
-  if (full !== HOME && !full.startsWith(HOME + path10.sep)) throw httpError(403, "Only folders inside your home directory can be browsed.");
+  const full = path11.resolve(expand(p || "~"));
+  if (full !== HOME && !full.startsWith(HOME + path11.sep)) throw httpError(403, "Only folders inside your home directory can be browsed.");
   let dirents;
   try {
-    dirents = fs12.readdirSync(full, { withFileTypes: true });
+    dirents = fs13.readdirSync(full, { withFileTypes: true });
   } catch {
     throw httpError(404, `Can't open ${full}`);
   }
-  const isRepo = (d) => fs12.existsSync(path10.join(d, ".git"));
+  const isRepo = (d) => fs13.existsSync(path11.join(d, ".git"));
   const entries = [];
   for (const e of dirents) {
     if (SKIP_DIRS.has(e.name) || !showHidden && e.name.startsWith(".")) continue;
-    const child = path10.join(full, e.name);
+    const child = path11.join(full, e.name);
     let dir = e.isDirectory();
     if (!dir && e.isSymbolicLink()) {
       try {
-        dir = fs12.statSync(child).isDirectory();
+        dir = fs13.statSync(child).isDirectory();
       } catch {
       }
     }
@@ -2150,8 +2489,8 @@ function listDir(p, showHidden) {
   entries.sort((a, b) => a.name.localeCompare(b.name, void 0, { sensitivity: "base" }));
   return {
     path: full,
-    display: full === HOME ? "~" : full.startsWith(HOME + path10.sep) ? "~" + full.slice(HOME.length) : full,
-    parent: full === HOME ? null : path10.dirname(full),
+    display: full === HOME ? "~" : full.startsWith(HOME + path11.sep) ? "~" + full.slice(HOME.length) : full,
+    parent: full === HOME ? null : path11.dirname(full),
     isRepo: isRepo(full),
     repoChildren: entries.filter((e) => e.isRepo).length,
     entries
@@ -2329,6 +2668,23 @@ var routes = [
     changed();
     return { sent: open.length };
   }],
+  ["GET", /^\/api\/worktrees\/(\w+)\/pr-threads$/, (m) => getPRThreads(getWt(arg(m)))],
+  ["POST", /^\/api\/worktrees\/(\w+)\/pr-threads\/sync$/, async (m) => {
+    const wt = getWt(arg(m));
+    await syncWorktree(wt);
+    return getPRThreads(wt);
+  }],
+  // Thread ids are GitHub node ids, which can hold "-".
+  ["POST", /^\/api\/pr-threads\/([\w-]+)\/(send|dismiss|restore)$/, (m) => {
+    const { wt, r, thread } = getThread(arg(m));
+    if (m[2] === "send") threadToComment(wt, r, thread);
+    else thread.status = m[2] === "dismiss" ? "dismissed" : "open";
+    save();
+    changed();
+    return thread;
+  }],
+  ["POST", /^\/api\/pr-threads\/([\w-]+)\/reply$/, (m, raw) => replyToThread(arg(m), String(bodyOf(raw).body ?? ""))],
+  ["POST", /^\/api\/pr-threads\/([\w-]+)\/(resolve|unresolve)$/, (m) => setResolved(arg(m), m[2] === "resolve")],
   ["GET", /^\/api\/fs$/, (_m, _body, url) => listDir(url.searchParams.get("path"), url.searchParams.get("hidden") === "1")],
   ["GET", /^\/api\/integrations$/, (_m, _body, url) => getIntegrations(url.searchParams.has("refresh"))],
   ["POST", /^\/api\/integrations\/coderabbit\/login$/, () => startCodeRabbitLogin()],
@@ -2421,7 +2777,7 @@ var routes = [
   }],
   ["POST", /^\/api\/shutdown$/, (_m, raw) => {
     const body = bodyOf(raw);
-    const replacement = typeof body.restartWith === "string" && body.restartWith.endsWith("server.mjs") && fs13.existsSync(body.restartWith) ? body.restartWith : null;
+    const replacement = typeof body.restartWith === "string" && body.restartWith.endsWith("server.mjs") && fs14.existsSync(body.restartWith) ? body.restartWith : null;
     if (jobsRunning()) {
       deferShutdown(replacement);
       log(`shutdown requested; waiting for running jobs to finish${replacement ? `, then starting ${replacement}` : ""}`);
@@ -2519,11 +2875,11 @@ data: ${JSON.stringify(publicState())}
     return;
   }
   const file = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
-  const full = path11.join(HERE, "public", path11.normalize(file));
-  if (!full.startsWith(path11.join(HERE, "public"))) return sendRaw(res, 403, "Forbidden", "text/plain");
-  fs14.readFile(full, (err, data) => {
+  const full = path12.join(HERE, "public", path12.normalize(file));
+  if (!full.startsWith(path12.join(HERE, "public"))) return sendRaw(res, 403, "Forbidden", "text/plain");
+  fs15.readFile(full, (err, data) => {
     if (err) return sendRaw(res, 404, "Not found", "text/plain");
-    sendRaw(res, 200, data, MIME[path11.extname(full)] || "application/octet-stream");
+    sendRaw(res, 200, data, MIME[path12.extname(full)] || "application/octet-stream");
   });
 });
 
@@ -2547,7 +2903,7 @@ server.on("error", (e) => {
 });
 server.listen(PORT, "127.0.0.1", async () => {
   log(`Worktree Review ${VERSION} on http://127.0.0.1:${PORT}  (data: ${DATA_DIR})`);
-  state.trash = state.trash.filter((p) => fs15.existsSync(p));
+  state.trash = state.trash.filter((p) => fs16.existsSync(p));
   for (const p of state.trash) deleteInBackground(p);
   await discoverWorktrees();
   refreshSessions();
@@ -2560,4 +2916,5 @@ server.listen(PORT, "127.0.0.1", async () => {
   }, 3e3);
   void loop(pollWorktrees, 1e3);
   setTimeout(() => void loop(refreshPRs, () => config.prPollMinutes * 6e4), 5e3);
+  setTimeout(() => void loop(syncPRThreads, syncInterval), 1e4);
 });
