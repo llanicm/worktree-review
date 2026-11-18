@@ -1,5 +1,12 @@
 # Changelog
 
+## [2.5.1](https://github.com/llanicm/worktree-review/compare/v2.5.0...v2.5.1) (2026-11-18)
+
+
+### Bug fixes
+
+* ask before a CodeRabbit review runs on paid usage credits ([#30](https://github.com/llanicm/worktree-review/issues/30)) ([42eec99](https://github.com/llanicm/worktree-review/commit/42eec99916aa4187d615ea60c5af311938c46476))
+
 ## [2.5.0](https://github.com/llanicm/worktree-review/compare/v2.4.3...v2.5.0) (2026-11-18)
 
 
