@@ -395,7 +395,38 @@ test('starting a review answers at once, and a problem found while setting up fa
     assert.equal((await api('POST', `/api/worktrees/${wt.id}/code-review`, { reviewer: 'coderabbit' })).status, 409, 'already running while it sets up');
     await until(async () => (await wtBy('fix/tax-rounding')).codeReviews.coderabbit.status === 'failed', 'the review to fail');
     const { reviews } = await get(`/api/worktrees/${wt.id}/code-reviews`);
-    assert.match(reviews.coderabbit.error, /No CodeRabbit reviews left for acme\/shop this hour/);
+    assert.match(reviews.coderabbit.error, /No free CodeRabbit reviews left for acme\/shop this hour/);
+    assert.equal(reviews.coderabbit.needsCredits, true);
+  } finally {
+    fs.rmSync(usage, { force: true });
+  }
+});
+
+test('past the free hourly CodeRabbit reviews, a review only runs on usage credits when asked to', async () => {
+  const wt = await wtBy('fix/tax-rounding');
+  const usage = path.join(DEMO, 'home', '.cr-usage.json');
+  const argsFile = path.join(DEMO, 'home', '.cr-review-args.json');
+  const run = async (body: Json, status: string): Promise<Json> => {
+    fs.rmSync(argsFile, { force: true });
+    await post(`/api/worktrees/${wt.id}/code-review`, { reviewer: 'coderabbit', ...body });
+    await until(async () => (await wtBy('fix/tax-rounding')).codeReviews.coderabbit.status === status, `the review to be ${status}`);
+    return (await get(`/api/worktrees/${wt.id}/code-reviews`)).reviews.coderabbit;
+  };
+  try {
+    fs.writeFileSync(usage, JSON.stringify({ state: 'unavailable' }));
+    const stopped = await run({}, 'failed');
+    assert.equal(stopped.needsCredits, true);
+    assert.ok(!fs.existsSync(argsFile), 'the CLI never ran');
+
+    const paid = await run({ useCredits: true }, 'done');
+    assert.equal(paid.useCredits, true);
+    assert.ok(JSON.parse(fs.readFileSync(argsFile, 'utf8')).includes('--use-credits'));
+
+    // CodeRabbit's own "On demand" pause, should the allowance look free when it isn't, asks the same way.
+    fs.writeFileSync(usage, JSON.stringify({ onDemand: true }));
+    const paused = await run({}, 'failed');
+    assert.equal(paused.needsCredits, true);
+    assert.ok(!JSON.parse(fs.readFileSync(argsFile, 'utf8')).includes('--use-credits'));
   } finally {
     fs.rmSync(usage, { force: true });
   }

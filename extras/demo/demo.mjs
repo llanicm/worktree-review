@@ -387,20 +387,27 @@ else if (args[0] === 'api' && q.includes('addPullRequestReviewThreadReply')) {
 `);
 shim('coderabbit', `
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+// A test can make the allowance slow to check, used up or unavailable, or the CLI wait for consent, with
+// {"ms": 1500, "remaining": 0, "state": "unavailable", "onDemand": true} in ~/.cr-usage.json.
+const usageOpts = () => { try { return JSON.parse(require('fs').readFileSync(require('path').join(process.env.HOME, '.cr-usage.json'), 'utf8')); } catch { return {}; } };
 if (args[0] === '--version') out('0.9.1');
 else if (args[0] === 'auth' && args[1] === 'status') {
   if (args.includes('--agent')) out({ authenticated: true, user: { username: 'sam-rivera', email: 'sam@example.com' }, currentOrg: { name: 'acme' }, organizations: [{ name: 'acme' }] });
   else out('Plan: Pro\\nSeat: assigned');
 } else if (args[0] === 'usage') {
-  // A test can make the allowance slow to check, or used up: {"ms": 1500, "remaining": 0} in ~/.cr-usage.json.
-  let o = {};
-  try { o = JSON.parse(require('fs').readFileSync(require('path').join(process.env.HOME, '.cr-usage.json'), 'utf8')); } catch {}
+  const o = usageOpts();
   await sleep(o.ms || 0);
-  out({ includedReviews: { state: 'available', limit: 8, remaining: o.remaining ?? 6, fullCapacityInMs: 1_800_000, rollingWindowMs: 3_600_000, repository: 'acme/shop' } });
+  out({ includedReviews: o.state === 'unavailable' ? { state: 'unavailable', reason: 'limit_reached' }
+    : { state: 'available', limit: 8, remaining: o.remaining ?? 6, fullCapacityInMs: 1_800_000, rollingWindowMs: 3_600_000, repository: 'acme/shop' } });
 } else if (args[0] === 'review') {
   // Kept so a test can check which flags the server passed.
   require('fs').writeFileSync(require('path').join(process.env.HOME, '.cr-review-args.json'), JSON.stringify(args));
   out({ type: 'review_context', baseBranch: 'main' });
+  // Usage-based reviews "On demand": past the limit, the CLI waits for --use-credits.
+  if (usageOpts().onDemand && !args.includes('--use-credits')) {
+    out({ type: 'action_required', status: 'awaiting_confirmation', billableFiles: 3, maxPrice: 0.75, command: 'coderabbit review --use-credits' });
+    process.exit(1);
+  }
   for (const message of ['Analyzing changes', 'Reviewing files']) { out({ type: 'status', message }); await sleep(400); }
   out({ type: 'finding', severity: 'major', fileName: 'src/discounts.ts', startLine: ${L.pct}, endLine: ${L.pct},
     title: 'Percentage discounts above 100% make the total negative',

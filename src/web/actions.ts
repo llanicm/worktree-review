@@ -259,18 +259,21 @@ export const actions: Record<string, Action> = {
     if (S.reviewMenu && S.reviewPick) S.reviewPick = { ...S.reviewPick, effort: null };
     renderMain();
   },
-  'review-start': async () => {
+  'review-start': async (el) => {
     const wt = curWt();
     if (!wt) return;
-    const { reviewer, effort } = reviewPick(wt);
-    const body: StartCodeReview = reviewer === 'claude' ? { reviewer, effort } : { reviewer };
+    // "Run with usage credits", offered once CodeRabbit's free hourly reviews are used up.
+    const credits = attr(el, 'credits') === '1';
+    if (credits && !confirm('Run this CodeRabbit review with usage credits? Your CodeRabbit organization is billed for it.')) return;
+    const { reviewer, effort } = credits ? { reviewer: 'coderabbit' as Reviewer, effort: st().config.reviewEffort } : reviewPick(wt);
+    const body: StartCodeReview = reviewer === 'claude' ? { reviewer, effort } : credits ? { reviewer, useCredits: true } : { reviewer };
     // Show it running straight away; the server's reply (and then live updates) replace this.
     const reviews = (view().codeReviews ??= {});
     const before = { review: reviews[reviewer], summary: wt.codeReviews[reviewer] };
     const now = Date.now();
     reviews[reviewer] = {
       reviewer, status: 'running', startedAt: now, finishedAt: null, baseRef: wt.baseRef, fingerprint: wt.fingerprint,
-      findings: [], reviewedFiles: [], error: null, heartbeatAt: now, usage: null, effort: reviewer === 'claude' ? effort : undefined, message: 'Starting',
+      findings: [], reviewedFiles: [], error: null, heartbeatAt: now, usage: null, effort: reviewer === 'claude' ? effort : undefined, useCredits: credits || undefined, message: 'Starting',
     };
     wt.codeReviews[reviewer] = { status: 'running', startedAt: now, finishedAt: null, heartbeatAt: now, open: 0, total: 0, sig: 'starting', stale: false, worst: null };
     S.reviewMenu = null;
@@ -288,7 +291,7 @@ export const actions: Record<string, Action> = {
     }
     if (S.view?.wtId === wt.id) (S.view.codeReviews ??= {})[reviewer] = r;
     indexFindings();
-    toast(reviewer === 'coderabbit' ? 'CodeRabbit started. This usually takes a few minutes.' : `Claude started a ${effort}-effort review.`);
+    toast(reviewer === 'coderabbit' ? `CodeRabbit started${credits ? ', paid with usage credits' : ''}. This usually takes a few minutes.` : `Claude started a ${effort}-effort review.`);
     renderMain();
   },
   'review-cancel': async (el) => {
