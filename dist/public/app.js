@@ -25,6 +25,7 @@ var S = {
   baseOther: null,
   blameOn: /* @__PURE__ */ new Set(),
   fileBlame: /* @__PURE__ */ new Map(),
+  reviewBarOpen: /* @__PURE__ */ new Map(),
   openBodies: /* @__PURE__ */ new Set(),
   removeErrors: {},
   seenJobs: /* @__PURE__ */ new Set(),
@@ -1550,11 +1551,11 @@ function reviewBarHtml(wt) {
   const pending = v.reviews;
   const live = st().sessions;
   const linked = wt.sessions;
-  const open = drafts.length || summary || pending.length;
+  const open = S.reviewBarOpen.get(wt.id) ?? Boolean(drafts.length || summary || pending.length);
   const target = S.summaries[`${wt.id}:target`] || "";
   const options = [`<option value="">${linked.length ? `Claude session working here (${linked.map((s) => esc(s.name)).join(", ")})` : "First Claude session that works here"}</option>`].concat(live.map((s) => `<option value="${esc(s.sessionId)}" ${target === s.sessionId ? "selected" : ""}>${esc(s.name)} (${esc(s.status)})${linked.some((l) => l.sessionId === s.sessionId) ? " · working here" : ""}</option>`));
   return `<details class="review-bar" ${open ? "open" : ""}>
-    <summary><span>Review</span><span class="progress">${drafts.length} draft comment${drafts.length === 1 ? "" : "s"}${pending.length ? ` · ${pending.length} waiting` : ""}</span></summary>
+    <summary data-act="toggle-review-bar" data-id="${wt.id}" title="${open ? "Minimise" : "Expand"}"><span><span class="caret">${open ? "▾" : "▸"}</span> Review</span><span class="progress">${drafts.length} draft comment${drafts.length === 1 ? "" : "s"}${pending.length ? ` · ${pending.length} waiting` : ""}</span></summary>
     <div class="body">
       <textarea data-ek="summary" placeholder="Overall feedback (optional)">${esc(summary)}</textarea>
       <div class="actions">
@@ -1908,6 +1909,16 @@ var actions = {
   },
   "collapse-all": () => collapseAll(view()),
   "expand-all": () => expandAll(view()),
+  "toggle-review-bar": (el, e) => {
+    e.preventDefault();
+    const bar = el.parentElement;
+    if (!(bar instanceof HTMLDetailsElement)) return;
+    bar.open = !bar.open;
+    S.reviewBarOpen.set(attr(el, "id"), bar.open);
+    el.title = bar.open ? "Minimise" : "Expand";
+    const caret = el.querySelector(".caret");
+    if (caret) caret.textContent = bar.open ? "▾" : "▸";
+  },
   "toggle-body": (el) => toggleBody(Number(attr(el, "n"))),
   "toggle-commit": (el) => {
     const n = Number(attr(el, "n"));
