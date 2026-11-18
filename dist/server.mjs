@@ -1311,31 +1311,35 @@ function shellTargets(cmd) {
   return dirs.filter((d) => d.startsWith("/"));
 }
 var worktreeOf = (p, paths) => p ? paths.filter((w) => p === w || p.startsWith(w + "/")).sort((a, b) => b.length - a.length)[0] : void 0;
-function linkSession(text, paths) {
-  const last = /* @__PURE__ */ new Map();
-  text.split("\n").forEach((line, i) => {
+function currentWorktree(text, paths) {
+  let current;
+  let cwd;
+  const hit = (p) => {
+    current = worktreeOf(p, paths) ?? current;
+  };
+  for (const line of text.split("\n")) {
     let entry;
     try {
       entry = JSON.parse(line);
     } catch {
-      return;
+      continue;
     }
-    const hit = (p) => {
-      const w = worktreeOf(p, paths);
-      if (w) last.set(w, i);
-    };
     const e = rec(entry);
-    hit(asStr(e.cwd));
+    const dir = asStr(e.cwd);
+    if (dir && dir !== cwd) {
+      cwd = dir;
+      hit(dir);
+    }
     const content = rec(e.message).content;
-    if (!Array.isArray(content)) return;
+    if (!Array.isArray(content)) continue;
     for (const c of content.map(rec)) {
       if (c.type !== "tool_use") continue;
       const input = rec(c.input);
       if (typeof c.name === "string" && EDIT_TOOLS.has(c.name)) hit(asStr(input.file_path) ?? asStr(input.notebook_path));
       else if (c.name === "Bash") for (const d of shellTargets(asStr(input.command) ?? "")) hit(d);
     }
-  });
-  return [...last].sort((a, b) => b[1] - a[1]).map(([p]) => p);
+  }
+  return current;
 }
 function parseSessionInfo(v) {
   if (!isRecord(v) || typeof v.sessionId !== "string" || !v.sessionId || typeof v.pid !== "number" || !v.pid) return null;
@@ -1395,7 +1399,8 @@ function refreshAgents(s, transcript, paths, ownPath) {
       a.scannedSize = size;
       a.scannedAt = Date.now();
       try {
-        a.worktreePaths = linkSession(readTail(tp, 3 * 1024 * 1024), paths).filter((p) => p !== ownPath);
+        const w = currentWorktree(readTail(tp, 3 * 1024 * 1024), paths);
+        a.worktreePaths = w && w !== ownPath ? [w] : [];
       } catch {
         a.scannedSize = -1;
       }
@@ -1431,13 +1436,14 @@ function refreshSessions() {
         if (size !== s.scannedSize && Date.now() - s.scannedAt > 8e3) {
           s.scannedSize = size;
           s.scannedAt = Date.now();
-          s.worktreePaths = linkSession(readTail(tp, 3 * 1024 * 1024), paths);
+          const w = currentWorktree(readTail(tp, 3 * 1024 * 1024), paths);
+          s.worktreePaths = w ? [w] : [];
         }
       } catch {
       }
       s.agents = refreshAgents(s, tp, paths, own);
     }
-    if (own && !s.worktreePaths.includes(own)) s.worktreePaths.unshift(own);
+    if (own && !s.worktreePaths.length) s.worktreePaths = [own];
   }
   for (const id of sessions.keys()) if (!live.has(id)) sessions.delete(id);
   for (const wt of wts.values()) {
