@@ -1,5 +1,13 @@
 # Changelog
 
+## [2.5.2](https://github.com/llanicm/worktree-review/compare/v2.5.1...v2.5.2) (2026-11-18)
+
+
+### Bug fixes
+
+* a session shows only in the worktree it is working in now ([#32](https://github.com/llanicm/worktree-review/issues/32)) ([b1735ac](https://github.com/llanicm/worktree-review/commit/b1735acbd576fb05598f4de245500e43b955cd31))
+* the review bar can be minimised and stays minimised ([#34](https://github.com/llanicm/worktree-review/issues/34)) ([58ce429](https://github.com/llanicm/worktree-review/commit/58ce429b88f2c1b3eff2a75ebeaf9d1cbd5846c4))
+
 ## [2.5.1](https://github.com/llanicm/worktree-review/compare/v2.5.0...v2.5.1) (2026-11-18)
 
 
