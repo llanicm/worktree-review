@@ -149,9 +149,10 @@ reload themselves.
 Code sessions from the last 30 days (in `~/.claude/projects`), finds the git repo for each, and lists
 all of that repo's worktrees. You can add other folders in Settings.
 
-**Linking sessions.** A live session counts as working in a worktree when it started there, edited a
-file in it, or ran a shell command that went into it (`cd`) or changed it (`git -C <path> commit` and
-the like). Reading files, searching or listing worktrees doesn't count. A subagent still running counts too: in the worktree
+**Linking sessions.** A live session shows in one worktree: the one it last worked in, by moving its
+directory there, editing a file in it, or running a shell command that went into it (`cd`) or changed
+it (`git -C <path> commit` and the like). Until it has done any of those, it shows where it started.
+Reading files, searching or listing worktrees doesn't count. A subagent still running counts too: in the worktree
 it was given (`isolation: "worktree"`), or one it reaches into the same way. It shows as
 `session › task`, naming the session that started it.
 
