@@ -160,6 +160,8 @@ export interface Worktree {
   codeReviews: Partial<Record<Reviewer, CodeReviewSummary>>;
   review: { reviewedAt: number | null; needsReview: boolean };
   comments: { draft: number; waiting: number; open: number; sig: string };
+  /** Review threads on its open PR, once they've been fetched. */
+  prThreads: PRThreadsSummary | null;
 }
 
 // ---------- background jobs ----------
@@ -348,6 +350,8 @@ export interface Comment {
   resolvedAt?: number;
   /** Set when it came from a code review finding. */
   fromFinding?: string;
+  /** Set when it came from a review thread on the PR. */
+  fromThread?: string;
   /** Set when it was handed to a Claude session. */
   deliveredTo?: DeliveredTo;
 }
@@ -449,6 +453,69 @@ export interface StartCodeReview {
 export interface CodeReviewsResponse {
   reviews: Partial<Record<Reviewer, CodeReview>>;
   usage: CodeRabbitUsage | null;
+}
+
+// ---------- GitHub PR review threads ----------
+
+export type PRThreadStatus = 'open' | 'sent' | 'dismissed';
+
+export interface PRThreadComment {
+  id: string;
+  /** GitHub login; CodeRabbit's is "coderabbitai". */
+  author: string;
+  bot: boolean;
+  body: string;
+  createdAt: number;
+  url: string;
+}
+
+export interface PRThread {
+  id: string;
+  file: string;
+  side: Side;
+  /** Lines in the PR's head commit; null once GitHub marks the thread outdated. */
+  line: number | null;
+  startLine: number | null;
+  originalLine: number | null;
+  /** Where the line is in the worktree's files now, or null when it changed or can't be placed. */
+  localLine: number | null;
+  isResolved: boolean;
+  isOutdated: boolean;
+  canResolve: boolean;
+  canUnresolve: boolean;
+  canReply: boolean;
+  comments: PRThreadComment[];
+  /** Picked out of the first comment when CodeRabbit wrote it. */
+  severity?: string;
+  title?: string;
+  suggestions?: string;
+  codegen?: string;
+  /** What you did with it here; GitHub doesn't know. */
+  status: PRThreadStatus;
+  commentId?: string;
+}
+
+/** GET /api/worktrees/:id/pr-threads */
+export interface PRThreads {
+  number: number;
+  url: string;
+  fetchedAt: number | null;
+  syncing: boolean;
+  error: string | null;
+  threads: PRThread[];
+  /** The latest reply Claude gave on the comment each thread was sent as, by thread id: a starting point for answering on GitHub. */
+  claudeReplies: Record<string, string>;
+}
+
+export interface PRThreadsSummary {
+  number: number;
+  /** Unresolved on GitHub and not sent or dismissed here. */
+  open: number;
+  total: number;
+  syncing: boolean;
+  error: string | null;
+  /** Changes whenever a thread, its comments or its status change. */
+  sig: string;
 }
 
 // ---------- settings ----------

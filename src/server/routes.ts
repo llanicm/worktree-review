@@ -1,8 +1,8 @@
 import fs from 'node:fs';
 import type {
   BaseChoices, BlameResponse, FileBlame, CodeRabbitLogin, CodeReview, CodeReviewsResponse, Comment, CommentsResponse, DiffResponse, DirListing,
-  Finding, HookResponse, Integrations, Job, NewComment, Ok, PromptResponse, PublicState, RepairResult, Review, Reviewer, SendAllResponse,
-  ShutdownResponse, StartCodeReview,
+  Finding, HookResponse, Integrations, Job, NewComment, Ok, PRThread, PRThreads, PromptResponse, PublicState, RepairResult, Review, Reviewer,
+  SendAllResponse, ShutdownResponse, StartCodeReview,
 } from '../shared/api.ts';
 import { cleanupStatus } from './cleanup-status.ts';
 import { startClaudeReview } from './claude-review.ts';
@@ -13,6 +13,7 @@ import { gitOk, httpError } from './exec.ts';
 import { getIntegrations, markHook, probe, startCodeRabbitLogin } from './integrations.ts';
 import { deferShutdown, jobs, jobsRunning, shutdownNow, startJob } from './jobs.ts';
 import { HOME } from './paths.ts';
+import { getPRThreads, getThread, replyToThread, setResolved, syncWorktree, threadToComment } from './pr-threads.ts';
 import { publicState } from './public-state.ts';
 import { removeWorktree, repairWorktrees } from './removal.ts';
 import { claimReviews, getComment, reviewPrompt, submitReview } from './reviews.ts';
@@ -26,7 +27,8 @@ import { baseChoices, getWt, refreshWorktree } from './worktrees.ts';
 /** Everything a route can answer with. Handlers are checked against this, so a response can't drift from ../shared/api.ts. */
 type ApiResult =
   | PublicState | BaseChoices | DiffResponse | BlameResponse | FileBlame | CommentsResponse | PromptResponse | Ok | Job | RepairResult | CodeReviewsResponse
-  | CodeReview | Finding | SendAllResponse | DirListing | Integrations | CodeRabbitLogin | Comment | Review | ShutdownResponse | HookResponse;
+  | CodeReview | Finding | SendAllResponse | DirListing | Integrations | CodeRabbitLogin | Comment | Review | ShutdownResponse | HookResponse
+  | PRThreads | PRThread;
 
 type Handler = (m: RegExpMatchArray, body: unknown, url: URL) => ApiResult | Promise<ApiResult>;
 export type Route = readonly [method: string, re: RegExp, handler: Handler];
@@ -159,6 +161,23 @@ export const routes: Route[] = [
     changed();
     return { sent: open.length };
   }],
+  ['GET', /^\/api\/worktrees\/(\w+)\/pr-threads$/, (m) => getPRThreads(getWt(arg(m)))],
+  ['POST', /^\/api\/worktrees\/(\w+)\/pr-threads\/sync$/, async (m): Promise<PRThreads> => {
+    const wt = getWt(arg(m));
+    await syncWorktree(wt);
+    return getPRThreads(wt);
+  }],
+  // Thread ids are GitHub node ids, which can hold "-".
+  ['POST', /^\/api\/pr-threads\/([\w-]+)\/(send|dismiss|restore)$/, (m): PRThread => {
+    const { wt, r, thread } = getThread(arg(m));
+    if (m[2] === 'send') threadToComment(wt, r, thread);
+    else thread.status = m[2] === 'dismiss' ? 'dismissed' : 'open';
+    save();
+    changed();
+    return thread;
+  }],
+  ['POST', /^\/api\/pr-threads\/([\w-]+)\/reply$/, (m, raw) => replyToThread(arg(m), String(bodyOf<{ body?: unknown }>(raw).body ?? ''))],
+  ['POST', /^\/api\/pr-threads\/([\w-]+)\/(resolve|unresolve)$/, (m) => setResolved(arg(m), m[2] === 'resolve')],
   ['GET', /^\/api\/fs$/, (_m, _body, url) => listDir(url.searchParams.get('path'), url.searchParams.get('hidden') === '1')],
   ['GET', /^\/api\/integrations$/, (_m, _body, url) => getIntegrations(url.searchParams.has('refresh'))],
   ['POST', /^\/api\/integrations\/coderabbit\/login$/, () => startCodeRabbitLogin()],

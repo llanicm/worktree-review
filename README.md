@@ -77,6 +77,21 @@ Claude** turns a finding into one of your draft comments, and **Dismiss** hides 
 
 ![A comment thread with Claude's reply, and a CodeRabbit finding, inline in the diff](docs/screenshots/coderabbit.png)
 
+### Comments from the PR
+
+When a worktree's branch has an open PR, its review comments from CodeRabbit, teammates or anyone
+else show up in the diff on the line they're about. If the code has changed since they were left,
+they move with it. A comment whose line has changed or that GitHub marks outdated is listed in the PR
+panel instead. **Send to Claude** turns a thread into a draft comment, including CodeRabbit's fix
+guidance. **Reply on GitHub** and **Resolve on GitHub** answer on the PR as you. Once Claude has
+replied, **Reply with Claude's answer** starts your GitHub reply from what it said.
+**Dismiss** hides a thread here only.
+
+New comments arrive within about a minute. The dashboard checks each open PR once a minute, and every
+20 seconds for ten minutes after a push, when CodeRabbit usually posts. It only downloads a PR's
+comments when something on the PR has changed. Opening a worktree or pressing **Check now** checks
+straight away.
+
 ### Merged worktrees clean themselves up
 
 When a branch's PR merges, its worktree is removed, along with the branch if everything on it is in

@@ -7,6 +7,7 @@ import { getIntegrations } from './integrations.ts';
 import { config } from './config.ts';
 import { DATA_DIR, PORT, VERSION } from './paths.ts';
 import { startBroadcast } from './public-state.ts';
+import { syncInterval, syncPRThreads } from './pr-threads.ts';
 import { refreshPRs } from './prs.ts';
 import { deleteInBackground } from './removal.ts';
 import { registerServer } from './jobs.ts';
@@ -42,4 +43,5 @@ server.listen(PORT, '127.0.0.1', async () => {
   void loop(async () => { refreshSessions(); offerReviews(); }, 3_000);
   void loop(pollWorktrees, 1_000);
   setTimeout(() => void loop(refreshPRs, () => config.prPollMinutes * 60_000), 5_000);
+  setTimeout(() => void loop(syncPRThreads, syncInterval), 10_000);
 });

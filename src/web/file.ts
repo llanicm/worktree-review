@@ -1,11 +1,12 @@
 // ---------- diff files, line comments ----------
-import type { Comment, FileBlame, Finding } from '../shared/api.ts';
+import type { Comment, FileBlame, Finding, PRThread } from '../shared/api.ts';
 import { findingHtml, findingsOf } from './code-review.ts';
 import { hl, keyOf, langFor, sameCommit } from './diff.ts';
 import { curWt, S, view } from './state.ts';
 import type { View, ViewFile } from './types.ts';
 import { ago, editorLink, editorName, esc, fnv, md } from './util.ts';
 import { lazyPlaceholder, lazyPlaceholderHtml } from './lazy.ts';
+import { openThreads, prThreadHtml } from './pr-threads.ts';
 
 export const commitClass = (n: number) => (n === 0 ? 'cu' : `c${((n - 1) % 8) + 1}`);
 export const commitLabel = (n: number) => (n === 0 ? 'uncommitted' : `#${n}`);
@@ -125,7 +126,9 @@ export function renderFile(f: ViewFile, byAnchor: Map<string, Comment[]>) {
   const outsideComments = mine.filter((c) => !shown.has(keyOf(c.file, c.side, c.line, c.commit)));
   const fileFindings = f.commit ? [] : findingsOf(v).filter((x) => x.file === f.path && x.status === 'open');
   const outsideFindings = fileFindings.filter((x) => !shown.has(keyOf(x.file, 'new', x.endLine || x.startLine)));
-  const nOpen = mine.length + fileFindings.length;
+  const filePR = f.commit ? [] : openThreads(v).filter((t) => t.file === f.path && t.localLine !== null);
+  const outsidePR = filePR.filter((t) => !shown.has(keyOf(t.file, 'new', t.localLine)));
+  const nOpen = mine.length + fileFindings.length + filePR.length;
   const touched = !f.commit ? fileCommitsOf(f.path) : [];
   const commitChips = touched.length && v.diff.commits.length
     ? touched.map((n) => `<span class="cchip ${commitClass(n)}" title="${esc(n ? `${commitByN(n)?.sha.slice(0, 8)} ${commitByN(n)?.subject || ''}` : 'Not committed yet')}">${commitLabel(n)}</span>`).join('') : '';
@@ -143,12 +146,13 @@ export function renderFile(f: ViewFile, byAnchor: Map<string, Comment[]>) {
   else if (kind === 'binary') body = '<div class="file-note">Binary file</div>';
   else if (kind === 'empty') body = `<div class="file-note">${f.status === 'renamed' ? 'Renamed without changes' : 'No content changes (mode change or empty file)'}</div>`;
   else if (kind === 'large') body = `<div class="file-note">Large diff (${f.lineCount} lines). <button class="link-btn" data-act="force-render" data-file="${esc(f.uid)}">Load it</button></div>`;
-  else if (lazyPlaceholder(f, mine.length + fileFindings.length > 0 || [...S.editors.keys()].some((k) => k.startsWith(`new:${f.commit ? `${f.commit}~` : ''}${f.path}|`)))) {
+  else if (lazyPlaceholder(f, nOpen > 0 || [...S.editors.keys()].some((k) => k.startsWith(`new:${f.commit ? `${f.commit}~` : ''}${f.path}|`)))) {
     body = lazyPlaceholderHtml(f);
   } else body = rowsHtml(f, byAnchor);
   const snippet = (line: number | null | undefined, text: string | undefined) => `<div class="outside-line"><span class="outside-no">${line ?? ''}</span><code>${text ? hl(text, lang) : '<span class="muted">(line not available)</span>'}</code></div>`;
   const outsideItems = [
     ...outsideFindings.map((x) => ({ line: x.startLine, html: snippet(x.startLine, x.snippet) + findingHtml(x, true) })),
+    ...outsidePR.map((t) => ({ line: t.localLine, html: prThreadHtml(t, true) })),
     ...outsideComments.map((c) => ({ line: c.line, html: snippet(c.line, c.lineText) + threadHtml(c) })),
   ].sort((a, b) => (a.line || 0) - (b.line || 0));
   const out = outsideItems.length && !collapsed
@@ -183,10 +187,11 @@ export function rowsHtml(f: ViewFile, byAnchor: Map<string, Comment[]>) {
       }
       rows.push(`<tr class="line ${l.t}" data-k="${esc(k)}"${cAttr}>${blameCell}<td class="num" data-act="new-comment" data-k="${esc(k)}">${l.o ?? ''}</td><td class="num" data-act="new-comment" data-k="${esc(k)}">${l.n ?? ''}</td><td class="code">${cBar}<button class="add-c" data-act="new-comment" data-k="${esc(k)}" title="Comment on this line">+</button><span class="sign">${sign}</span>${hl(l.text, lang)}</td></tr>`);
       const crHere: Finding[] = side === 'new' ? (v.crByAnchor?.get(k) || []) : [];
+      const prHere: PRThread[] = side === 'new' && !f.commit ? (v.prByAnchor?.get(k) || []) : [];
       const threads = (byAnchor.get(k) || []);
       const ek = `new:${k}`;
-      if (threads.length || crHere.length || S.editors.has(ek)) {
-        rows.push(`<tr class="thread-row"><td colspan="${span}"><div class="threads">${crHere.map((f) => findingHtml(f, true)).join('')}${threads.map(threadHtml).join('')}${S.editors.has(ek) ? editorHtml(ek, 'Add comment') : ''}</div></td></tr>`);
+      if (threads.length || crHere.length || prHere.length || S.editors.has(ek)) {
+        rows.push(`<tr class="thread-row"><td colspan="${span}"><div class="threads">${prHere.map((t) => prThreadHtml(t, true)).join('')}${crHere.map((f) => findingHtml(f, true)).join('')}${threads.map(threadHtml).join('')}${S.editors.has(ek) ? editorHtml(ek, 'Add comment') : ''}</div></td></tr>`);
       }
     }
   }

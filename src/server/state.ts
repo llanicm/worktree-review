@@ -37,6 +37,7 @@ function loadState(): State {
     cleaned: Array.isArray(o.cleaned) ? (o.cleaned as State['cleaned']) : [],
     trash: Array.isArray(o.trash) ? (o.trash as string[]) : [],
     codeReviews: isRecord(o.codeReviews) ? (o.codeReviews as State['codeReviews']) : fromCodeRabbit(o.coderabbit),
+    prThreads: isRecord(o.prThreads) ? (o.prThreads as State['prThreads']) : {},
   };
   if (typeof o.onboardedAt === 'number' || o.onboardedAt === null) state.onboardedAt = o.onboardedAt;
   // Installed before there was a welcome step, and already used: don't send them through it now.

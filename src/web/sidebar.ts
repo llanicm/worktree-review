@@ -73,6 +73,7 @@ function wtItem(wt: Worktree, showNew?: boolean) {
     <div class="wt-sub">
       ${wt.sessions.map(sessionChip).join('')}${wt.agents.map(agentChip).join('')}${prChip(wt.pr)}
       ${nComments ? `<span class="chip comments">${nComments} comment${nComments === 1 ? '' : 's'}</span>` : ''}
+      ${wt.prThreads?.open ? `<span class="chip reviewer github" title="${wt.prThreads.open} unresolved review thread${wt.prThreads.open === 1 ? '' : 's'} on PR #${wt.prThreads.number} you haven't sent or dismissed">PR comments · ${wt.prThreads.open}</span>` : ''}
       ${wt.busy ? '<span class="chip busy-chip"><span class="dot busy"></span>removing…</span>' : ''}
       ${wt.error ? `<span class="chip closed" title="${esc(wt.error.message)}">${wt.error.kind === 'broken-link' ? 'broken link' : "can't read"}</span>`
         : wt.dirtyKind === 'lockfile-only' ? '<span class="chip" title="Only a lockfile changed">lockfile changed</span>'

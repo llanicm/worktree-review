@@ -309,6 +309,31 @@ const prs = {
 for (const pr of Object.values(prs)) pr.url = `https://github.com/acme/shop/pull/${pr.number}`;
 fs.writeFileSync(path.join(BIN, 'prs.json'), JSON.stringify(prs));
 
+// Review threads on the open PR, as GitHub's GraphQL API returns them; replies and resolving change this file.
+const ghComment = (id, login, bot, body, ago) => ({ id, body, createdAt: new Date(now - ago).toISOString(), url: `https://github.com/acme/shop/pull/42#discussion_${id}`, author: { login, __typename: bot ? 'Bot' : 'User' } });
+const ghThread = (id, line, comments, more = {}) => ({ id, path: 'src/tax.ts', line, startLine: null, originalLine: line, diffSide: 'RIGHT', isResolved: false, isOutdated: false,
+  viewerCanResolve: true, viewerCanUnresolve: true, viewerCanReply: true, comments: { nodes: comments }, ...more });
+const RT = {
+  raw: lineOf(rounding, 'src/tax.ts', 'const raw = amount'),
+  half: lineOf(rounding, 'src/tax.ts', 'return floor % 2'),
+};
+const threads = { 42: { updatedAt: new Date(now - 2 * HOUR).toISOString(), headRefOid: roundingHead, threads: [
+  ghThread('PRRT_kwDOdemo-1', RT.raw, [ghComment('PRRC_1', 'coderabbitai', true, [
+    '_⚠️ Potential issue_ | _🟠 Major_', '',
+    '**Rounding works on floating-point cents, so .5 is rarely exact.**', '',
+    '`amount * rate` is a float: 0.125 * 100 can come out as 12.499999. The tie check then never matches, and banker\'s rounding silently becomes round-down.', '',
+    '<details>', '<summary>📝 Committable suggestion</summary>', '', '```suggestion', '  const raw = Math.round(amount * (RATES[region] ?? 0) * 1e6) / 1e6;', '```', '', '</details>', '',
+    '<details>', '<summary>🤖 Prompt for AI Agents</summary>', '', '```', `In src/tax.ts around line ${RT.raw}, round raw to 6 decimal places before splitting it into floor and diff, so exact halves compare equal to 0.5.`, '```', '', '</details>', '',
+    '<!-- This is an auto-generated comment by CodeRabbit -->',
+  ].join('\n'), 3 * HOUR)]),
+  ghThread('PRRT_kwDOdemo-2', RT.half, [
+    ghComment('PRRC_2', 'priya-k', false, 'Can we get a test for the exact .5 case, both odd and even? This is the bit that bit us last time.', 2 * HOUR),
+  ]),
+  ghThread('PRRT_kwDOdemo-3', null, [ghComment('PRRC_3', 'priya-k', false, 'Nit: `rate` reads better than `RATES[region]` inline.', 5 * HOUR)], { originalLine: 3, isOutdated: true }),
+  ghThread('PRRT_kwDOdemo-4', 1, [ghComment('PRRC_4', 'coderabbitai', true, '_🧹 Nitpick_ | _🔵 Trivial_\n\n**Consider `as const` for RATES.**', 6 * HOUR)], { isResolved: true }),
+] } };
+fs.writeFileSync(path.join(BIN, 'threads.json'), JSON.stringify(threads));
+
 // The stand-ins are CommonJS scripts; keep the repo's "type": "module" from applying when the demo folder is inside it.
 fs.writeFileSync(path.join(BIN, 'package.json'), '{ "type": "commonjs" }\n');
 const shim = (name, body) => {
@@ -317,11 +342,41 @@ const shim = (name, body) => {
   fs.chmodSync(p, 0o755);
 };
 shim('gh', `
-const prs = JSON.parse(require('fs').readFileSync(${JSON.stringify(path.join(BIN, 'prs.json'))}, 'utf8'));
+const fs = require('fs');
+const prs = JSON.parse(fs.readFileSync(${JSON.stringify(path.join(BIN, 'prs.json'))}, 'utf8'));
+const THREADS = ${JSON.stringify(path.join(BIN, 'threads.json'))};
+const db = JSON.parse(fs.readFileSync(THREADS, 'utf8'));
+const vars = {};
+args.forEach((a, i) => { if ((a === '-f' || a === '-F') && args[i + 1]) { const at = args[i + 1].indexOf('='); vars[args[i + 1].slice(0, at)] = args[i + 1].slice(at + 1); } });
+const q = vars.query || '';
+const thread = () => Object.values(db).flatMap((p) => p.threads.map((t) => [p, t])).find(([, t]) => t.id === vars.id) || process.exit(1);
+const touch = (p) => { p.updatedAt = new Date().toISOString(); fs.writeFileSync(THREADS, JSON.stringify(db)); };
 if (args[0] === '--version') out('gh version 2.62.0 (demo)');
 else if (args[0] === 'auth') out('github.com\\n  ✓ Logged in to github.com account sam-rivera (keyring)');
-else if (args[0] === 'api') {
-  const q = args[args.indexOf('-f') + 1];
+else if (args[0] === 'api' && q.includes('addPullRequestReviewThreadReply')) {
+  const [p, t] = thread();
+  const comment = { id: 'PRRC_' + Date.now(), body: vars.body, createdAt: new Date().toISOString(), url: 'https://github.com/acme/shop/pull/42', author: { login: 'sam-rivera', __typename: 'User' } };
+  t.comments.nodes.push(comment);
+  touch(p);
+  out({ data: { addPullRequestReviewThreadReply: { comment } } });
+} else if (args[0] === 'api' && q.toLowerCase().includes('resolvereviewthread')) {
+  const [p, t] = thread();
+  const op = q.includes('unresolveReviewThread') ? 'unresolveReviewThread' : 'resolveReviewThread';
+  t.isResolved = op === 'resolveReviewThread';
+  touch(p);
+  out({ data: { [op]: { thread: { isResolved: t.isResolved } } } });
+} else if (args[0] === 'api' && q.includes('reviewThreads')) {
+  const p = db[vars.number];
+  out({ data: { repository: { pullRequest: p && { url: 'https://github.com/acme/shop/pull/' + vars.number, updatedAt: p.updatedAt, headRefOid: p.headRefOid,
+    reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: p.threads } } } } });
+} else if (args[0] === 'api' && !q.includes('pullRequests(')) {
+  const repository = {};
+  for (const m of q.matchAll(/(p\\d+): pullRequest\\(number: (\\d+)\\)/g)) {
+    const p = db[m[2]];
+    repository[m[1]] = p ? { updatedAt: p.updatedAt, headRefOid: p.headRefOid } : null;
+  }
+  out({ data: { repository } });
+} else if (args[0] === 'api') {
   const repository = {};
   for (const m of q.matchAll(/(b\\d+): pullRequests\\(headRefName: ("(?:[^"\\\\]|\\\\.)*")/g)) {
     const pr = prs[JSON.parse(m[2])];

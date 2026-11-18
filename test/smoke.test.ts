@@ -286,6 +286,66 @@ test('CodeRabbit findings can be sent, dismissed and restored', async () => {
   assert.equal((await api('POST', `/api/worktrees/${wt.id}/code-review/coderabbit/cancel`)).status, 409);
 });
 
+test('PR review threads: synced from GitHub, placed on the right line, and answered both ways', async () => {
+  const wt = await wtBy('fix/tax-rounding');
+  const summary = (await until(async () => (await wtBy('fix/tax-rounding')).prThreads?.fetchedAt !== null && (await wtBy('fix/tax-rounding')).prThreads, 'the PR threads')) as Json;
+  assert.equal(summary.number, 42);
+  assert.equal(summary.open, 3, 'the resolved thread is not open');
+  let pr = await get(`/api/worktrees/${wt.id}/pr-threads`);
+  const byId = (id: string) => pr.threads.find((t: Json) => t.id === id);
+  const rabbit = byId('PRRT_kwDOdemo-1');
+  assert.equal(rabbit.severity, 'major');
+  assert.match(rabbit.title, /floating-point cents/);
+  assert.match(rabbit.codegen, /round raw to 6 decimal places/);
+  assert.match(rabbit.suggestions, /Math\.round/);
+  assert.ok(!rabbit.comments[0].body.includes('<!--'), 'HTML comments are stripped');
+  assert.equal(rabbit.localLine, rabbit.line, 'on the PR head itself, lines match');
+  assert.equal(byId('PRRT_kwDOdemo-3').localLine, null, 'an outdated thread has no line');
+  assert.equal(byId('PRRT_kwDOdemo-4').isResolved, true);
+
+  // Lines added above in the worktree move the threads down; editing the line itself unplaces it.
+  const file = path.join(wt.path, 'src/tax.ts');
+  const before = fs.readFileSync(file, 'utf8');
+  fs.writeFileSync(file, '// a\n// b\n' + before.replace('return floor % 2 === 0 ? floor : floor + 1;', 'return floor % 2 ? floor + 1 : floor;'));
+  try {
+    pr = await until(async () => {
+      const r = await get(`/api/worktrees/${wt.id}/pr-threads`);
+      return r.threads.find((t: Json) => t.id === 'PRRT_kwDOdemo-1').localLine === rabbit.line + 2 && r;
+    }, 'threads to follow the edit');
+    assert.equal(byId('PRRT_kwDOdemo-2').localLine, null, 'the changed line has no place');
+  } finally {
+    fs.writeFileSync(file, before);
+  }
+
+  // Send to Claude: a draft comment that carries CodeRabbit's fix guidance.
+  await post(`/api/pr-threads/${rabbit.id}/send`);
+  const c = (await get(`/api/worktrees/${wt.id}/comments`)).comments.find((x: Json) => x.fromThread === rabbit.id);
+  assert.equal(c.status, 'draft');
+  assert.match(c.body, /CodeRabbit on PR #42 \(major\)/);
+  assert.match(c.body, /Fix guidance from CodeRabbit/);
+  // Claude's answer is offered as the start of a GitHub reply.
+  await post(`/api/comments/${c.id}/resolve`, { note: 'Rounded to 6 places before the tie check.', author: 'claude' });
+  assert.equal((await get(`/api/worktrees/${wt.id}/pr-threads`)).claudeReplies[rabbit.id], 'Rounded to 6 places before the tie check.');
+
+  // Reply and resolve on GitHub, and undo.
+  const replied = await post(`/api/pr-threads/${rabbit.id}/reply`, { body: 'Fixed in the next push.' });
+  assert.equal(replied.comments.at(-1).body, 'Fixed in the next push.');
+  assert.equal(replied.comments.at(-1).author, 'sam-rivera');
+  assert.equal((await post(`/api/pr-threads/${rabbit.id}/resolve`)).isResolved, true);
+  assert.equal((await post(`/api/pr-threads/${rabbit.id}/unresolve`)).isResolved, false);
+  assert.equal((await api('POST', `/api/pr-threads/${rabbit.id}/reply`, { body: ' ' })).status, 400);
+
+  // Dismiss is local; a fresh fetch keeps it, and GitHub's own replies stay.
+  await post(`/api/pr-threads/PRRT_kwDOdemo-2/dismiss`);
+  pr = await post(`/api/worktrees/${wt.id}/pr-threads/sync`);
+  assert.equal(byId('PRRT_kwDOdemo-2').status, 'dismissed');
+  assert.equal(byId(rabbit.id).status, 'sent');
+  assert.equal(byId(rabbit.id).comments.length, 2);
+  await post(`/api/pr-threads/PRRT_kwDOdemo-2/restore`);
+  assert.equal((await api('POST', `/api/pr-threads/nope/send`)).status, 404);
+  assert.equal((await api('POST', `/api/worktrees/${(await wtBy('feat/search-filters')).id}/pr-threads/sync`)).status, 409, 'no open PR');
+});
+
 test('Claude reviews: effort, findings, cancelling, and the reviewer is not a session', async () => {
   const wt = await wtBy('feat/checkout-discounts');
   const { reviews } = await get(`/api/worktrees/${wt.id}/code-reviews`);
