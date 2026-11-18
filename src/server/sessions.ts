@@ -33,7 +33,7 @@ function readTail(p: string, bytes: number): string {
   } finally { fs.closeSync(fd); }
 }
 
-// Which worktrees has this session been working in? One counts when the session's directory was inside it,
+// Which worktree is this session working in now? The one it last acted in: its directory moved into it,
 // it edited a file in it, or it ran a shell command that went into it (`cd`) or changed it with `git -C`.
 // Only mentioning a path, as reading, searching or listing worktrees does, isn't working there.
 const EDIT_TOOLS = new Set(['Edit', 'MultiEdit', 'Write', 'NotebookEdit']);
@@ -54,24 +54,28 @@ function shellTargets(cmd: string): string[] {
 const worktreeOf = (p: string | undefined, paths: string[]): string | undefined =>
   p ? paths.filter((w) => p === w || p.startsWith(w + '/')).sort((a, b) => b.length - a.length)[0] : undefined;
 
-function linkSession(text: string, paths: string[]): string[] {
-  const last = new Map<string, number>(); // worktree -> line it was last worked in
-  text.split('\n').forEach((line, i) => {
+function currentWorktree(text: string, paths: string[]): string | undefined {
+  let current: string | undefined;
+  let cwd: string | undefined;
+  const hit = (p: string | undefined): void => { current = worktreeOf(p, paths) ?? current; };
+  for (const line of text.split('\n')) {
     let entry: unknown;
-    try { entry = JSON.parse(line); } catch { return; } // the first line is usually cut off
-    const hit = (p: string | undefined): void => { const w = worktreeOf(p, paths); if (w) last.set(w, i); };
+    try { entry = JSON.parse(line); } catch { continue; } // the first line is usually cut off
     const e = rec(entry);
-    hit(asStr(e.cwd));
+    // Every entry carries the session's directory, and a shell that leaves it goes back there after each command.
+    // Only a move counts, or a session that edits a worktree from where it started would never be seen in it.
+    const dir = asStr(e.cwd);
+    if (dir && dir !== cwd) { cwd = dir; hit(dir); }
     const content = rec(e.message).content;
-    if (!Array.isArray(content)) return;
+    if (!Array.isArray(content)) continue;
     for (const c of content.map(rec)) {
       if (c.type !== 'tool_use') continue;
       const input = rec(c.input);
       if (typeof c.name === 'string' && EDIT_TOOLS.has(c.name)) hit(asStr(input.file_path) ?? asStr(input.notebook_path));
       else if (c.name === 'Bash') for (const d of shellTargets(asStr(input.command) ?? '')) hit(d);
     }
-  });
-  return [...last].sort((a, b) => b[1] - a[1]).map(([p]) => p);
+  }
+  return current;
 }
 
 interface SessionInfo { sessionId: string; pid: number; name?: string; status?: string; cwd?: string }
@@ -134,10 +138,13 @@ function refreshAgents(s: SessionRecord, transcript: string, paths: string[], ow
     } else if (size !== a.scannedSize && Date.now() - a.scannedAt > 8_000) {
       a.scannedSize = size;
       a.scannedAt = Date.now();
-      // Without a worktree of its own, a subagent starts in its session's directory; only count
-      // the worktrees it reaches into from there.
+      // Without a worktree of its own, a subagent starts in its session's directory; it only counts
+      // while it's working in another worktree, reached from there.
       // It can be removed between the stat and the read; keep what it had and look again next time.
-      try { a.worktreePaths = linkSession(readTail(tp, 3 * 1024 * 1024), paths).filter((p) => p !== ownPath); } catch { a.scannedSize = -1; }
+      try {
+        const w = currentWorktree(readTail(tp, 3 * 1024 * 1024), paths);
+        a.worktreePaths = w && w !== ownPath ? [w] : [];
+      } catch { a.scannedSize = -1; }
     }
     result.push(a);
   }
@@ -166,12 +173,14 @@ export function refreshSessions(): void {
         if (size !== s.scannedSize && Date.now() - s.scannedAt > 8_000) {
           s.scannedSize = size;
           s.scannedAt = Date.now();
-          s.worktreePaths = linkSession(readTail(tp, 3 * 1024 * 1024), paths);
+          const w = currentWorktree(readTail(tp, 3 * 1024 * 1024), paths);
+          s.worktreePaths = w ? [w] : [];
         }
       } catch {}
       s.agents = refreshAgents(s, tp, paths, own);
     }
-    if (own && !s.worktreePaths.includes(own)) s.worktreePaths.unshift(own);
+    // A session shows in one worktree: where it's working now, or where it started until it works anywhere.
+    if (own && !s.worktreePaths.length) s.worktreePaths = [own];
   }
   for (const id of sessions.keys()) if (!live.has(id)) sessions.delete(id);
   for (const wt of wts.values()) {
