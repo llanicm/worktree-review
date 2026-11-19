@@ -1,7 +1,7 @@
 // End-to-end check of the server against the demo (extras/demo/demo.mjs): every API route,
 // the removal rules, hook delivery, the security checks, and the page rendering in Chrome.
 // Run with: npm test  (needs Node 22.18+ to run TypeScript directly; Chrome for the page check)
-import { test, before, after } from 'node:test';
+import { describe, test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -611,4 +611,50 @@ test('the page renders a worktree without errors', { skip: !fs.existsSync(proces
   } finally {
     await page.close();
   }
+});
+
+describe('the review box', { skip: !fs.existsSync(process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome') && 'Chrome not found' }, () => {
+  let page: Awaited<ReturnType<typeof openPage>>;
+  let wtId: string;
+  const reviews = async () => (await get(`/api/worktrees/${wtId}/comments`)).reviews.length;
+  const type = (text: string) => page.eval(`(() => { const t = document.querySelector('textarea[data-ek=summary]'); t.value = ${JSON.stringify(text)}; t.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  const press = (keys: { metaKey?: boolean; ctrlKey?: boolean }) =>
+    page.eval(`document.querySelector('textarea[data-ek=summary]').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, ...${JSON.stringify(keys)} }))`);
+
+  before(async () => {
+    wtId = (await wtBy('feat/search-filters')).id;
+    page = await openPage(`${BASE}/#/${wtId}`);
+    await page.waitFor("document.querySelector('textarea[data-ek=summary]')");
+  });
+  after(() => page.close());
+
+  test('Enter alone does not send', async () => {
+    const before = await reviews();
+    await type('Plain Enter is a new line');
+    await press({});
+    await sleep(300);
+    assert.equal(await reviews(), before);
+  });
+
+  test('⌘Enter sends the review', async () => {
+    const before = await reviews();
+    await press({ metaKey: true });
+    await until(async () => (await reviews()) === before + 1, 'the review to be sent');
+  });
+
+  test('Ctrl+Enter sends it too', async () => {
+    const before = await reviews();
+    await page.waitFor("!document.querySelector('textarea[data-ek=summary]').value");
+    await type('Sent with Ctrl+Enter');
+    await press({ ctrlKey: true });
+    await until(async () => (await reviews()) === before + 1, 'the review to be sent');
+  });
+
+  test('does nothing when there is nothing to send', async () => {
+    const before = await reviews();
+    await page.waitFor("document.querySelector('[data-act=submit]').disabled");
+    await press({ metaKey: true });
+    await sleep(300);
+    assert.equal(await reviews(), before);
+  });
 });

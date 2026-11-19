@@ -203,12 +203,12 @@ function reviewBarHtml(wt: Worktree) {
   return `<details class="review-bar" ${open ? 'open' : ''}>
     <summary data-act="toggle-review-bar" data-id="${wt.id}" title="${open ? 'Minimise' : 'Expand'}"><span><span class="caret">${open ? '▾' : '▸'}</span> Review</span><span class="progress">${drafts.length} draft comment${drafts.length === 1 ? '' : 's'}${pending.length ? ` · ${pending.length} waiting` : ''}</span></summary>
     <div class="body">
-      <textarea data-ek="summary" placeholder="Overall feedback (optional)">${esc(summary)}</textarea>
+      <textarea data-ek="summary" placeholder="Overall feedback (optional) · ⌘↵ to send">${esc(summary)}</textarea>
       <div class="actions">
         <select data-act="target" title="Which Claude session gets this review">${options.join('')}</select>
         <span style="flex:1"></span>
         <button class="btn" data-act="copy-prompt" ${drafts.length || pending.length ? '' : 'disabled'}>Copy as prompt</button>
-        <button class="btn primary" data-act="submit" ${drafts.length || summary.trim() ? '' : 'disabled'}>Send to Claude</button>
+        <button class="btn primary" data-act="submit" title="Send to Claude (⌘↵ or Ctrl+Enter)" ${drafts.length || summary.trim() ? '' : 'disabled'}>Send to Claude</button>
       </div>
       <div class="note">${linked.length
         ? 'Delivered when that session finishes what it\'s doing, or with your next message to it.'
