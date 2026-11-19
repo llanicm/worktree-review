@@ -427,6 +427,8 @@ shim('claude', `
 const fs = require('fs'), path = require('path');
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 if (args[0] === '--version') { out('2.1.0 (Claude Code)'); return; }
+const flag = (f) => args[args.indexOf(f) + 1];
+const fail = (msg) => { console.error(msg); process.exit(2); };
 // Plugins: none installed until \`claude plugin install\` is run, like on a machine that ran the dashboard by hand.
 const installed = path.join(process.env.HOME, '.claude', 'demo-plugin-installed');
 if (args[0] === 'plugin' && args[1] === 'list') { out(fs.existsSync(installed) ? [{ id: 'worktree-review@worktree-review', version: '0.0.0', scope: 'user', enabled: true }] : []); return; }
@@ -436,8 +438,6 @@ if (args[0] === 'plugin' && args[1] === 'install') {
   out({ ok: true, plugin: 'worktree-review@worktree-review' });
   return;
 }
-const flag = (f) => args[args.indexOf(f) + 1];
-const fail = (msg) => { console.error(msg); process.exit(2); };
 if (!args.includes('-p') || !args.includes('--safe-mode') || !args.includes('--json-schema') || flag('--output-format') !== 'stream-json') fail('unexpected arguments: ' + args.join(' '));
 if (process.env.CLAUDECODE || process.env.CLAUDE_CODE_SESSION_ID) fail('started with the environment of another session');
 if (!['low', 'medium', 'high', 'xhigh', 'max'].includes(flag('--effort'))) fail('unknown effort: ' + flag('--effort'));
