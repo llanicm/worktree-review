@@ -658,3 +658,84 @@ describe('the review box', { skip: !fs.existsSync(process.env.CHROME || '/Applic
     assert.equal(await reviews(), before);
   });
 });
+
+describe('commit order', { skip: !fs.existsSync(process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome') && 'Chrome not found' }, () => {
+  let page: Awaited<ReturnType<typeof openPage>>;
+  let wt: Json;
+  const groups = "[...document.querySelectorAll('.commit-group .cnum')].map((e) => e.textContent)";
+  const click = (selector: string) => page.eval(`document.querySelector(${JSON.stringify(selector)}).click()`);
+  const byCommit = async () => {
+    await click('[data-act=mode][data-mode=commits]');
+    await page.waitFor("document.querySelector('[data-act=order]')");
+  };
+  const allChanges = async () => {
+    await click('[data-act=mode][data-mode=full]');
+    await page.waitFor("document.querySelector('[data-act=mode][data-mode=full].on') && !document.querySelector('.commit-group')");
+  };
+
+  before(async () => {
+    wt = await wtBy('feat/checkout-discounts');
+    page = await openPage(`${BASE}/#/${wt.id}`);
+    await page.waitFor("document.querySelector('[data-act=mode][data-mode=commits]')");
+    await click('[data-act=mode][data-mode=commits]');
+    await page.waitFor(`${groups}.length >= 2`);
+  });
+  after(() => page.close());
+
+  test('shows the oldest commit first by default', async () => {
+    assert.equal((await page.eval<string[]>(groups))[0], '#1');
+  });
+
+  describe('newest first', () => {
+    before(async () => {
+      await click('[data-act=order][data-newest=true]');
+      await page.waitFor(`${groups}[0] !== '#1'`);
+    });
+
+    test('puts uncommitted changes at the top', async () => {
+      assert.equal((await page.eval<string[]>(groups))[0], '±');
+    });
+
+    test('then the latest commit', async () => {
+      assert.equal((await page.eval<string[]>(groups))[1], `#${wt.ahead}`);
+    });
+
+    test('says newest first above the commits list', async () => {
+      assert.match(await page.eval<string>("document.querySelector('.commits-panel summary').textContent"), /newest first/);
+    });
+
+    test('lists uncommitted changes first in the commits list', async () => {
+      assert.equal(await page.eval<string>("document.querySelector('.commits-panel .commit .cswatch').textContent"), '±');
+    });
+
+    test('is not offered in All changes', async () => {
+      await allChanges();
+      assert.equal(await page.eval("!!document.querySelector('[data-act=order]')"), false);
+    });
+
+    test('leaves the file order in All changes alone', async () => {
+      const files = "[...document.querySelectorAll('section.file .file-name')].map((e) => e.getAttribute('title')).join()";
+      const newest = await page.eval<string>(files);
+      await byCommit();
+      await click('[data-act=order][data-newest=false]');
+      await page.waitFor(`${groups}[0] === '#1'`);
+      await allChanges();
+      assert.equal(await page.eval<string>(files), newest);
+      await byCommit();
+      await click('[data-act=order][data-newest=true]');
+      await page.waitFor(`${groups}[0] === '±'`);
+    });
+
+    test('remembers the choice after a reload', async () => {
+      await page.eval('location.reload()');
+      await page.waitFor("document.querySelector('[data-act=mode][data-mode=commits]')");
+      await byCommit();
+      assert.ok(await page.waitFor("document.querySelector('[data-act=order][data-newest=true].on')"));
+    });
+
+    after(async () => {
+      await byCommit();
+      await click('[data-act=order][data-newest=false]');
+    });
+  });
+});

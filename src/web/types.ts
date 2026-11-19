@@ -120,6 +120,7 @@ export interface State {
   blameOn: Set<string>;            // file uids showing the Blame column
   fileBlame: Map<string, FileBlame>; // `${fingerprint}:${path}` -> full-history blame
   reviewBarOpen: Map<string, boolean>; // worktree -> the review bar opened or minimised by hand
+  newestFirst: boolean;            // commits, and files by commit, newest first; remembered in this browser
   openBodies: Set<number>;         // commit messages expanded past the clamp
   removeErrors: Record<string, string>; // wtId -> why the last removal failed
   seenJobs: Set<string>;           // finished jobs already handled
