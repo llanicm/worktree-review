@@ -39,6 +39,7 @@ function loadState(): State {
     codeReviews: isRecord(o.codeReviews) ? (o.codeReviews as State['codeReviews']) : fromCodeRabbit(o.coderabbit),
     prThreads: isRecord(o.prThreads) ? (o.prThreads as State['prThreads']) : {},
   };
+  if (isRecord(o.plugin)) state.plugin = o.plugin as State['plugin'];
   if (typeof o.onboardedAt === 'number' || o.onboardedAt === null) state.onboardedAt = o.onboardedAt;
   // Installed before there was a welcome step, and already used: don't send them through it now.
   else if (state.comments.length || state.cleaned.length || Object.values(state.worktrees).some((w) => w.reviewedAt)) state.onboardedAt = Date.now();

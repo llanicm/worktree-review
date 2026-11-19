@@ -22,6 +22,10 @@ export const claudeReady = (): boolean => !!integrations.data?.claude.cliVersion
 let claudePath = 'claude';
 export const claudeBin = (): string => claudePath;
 
+// The server inherits the environment of the session whose hook started it. These would tie a claude it runs to that session.
+const SESSION_VARS = /^(CLAUDECODE|CLAUDE_PID|CLAUDE_EFFORT|CLAUDE_CODE_(ENTRYPOINT|SESSION_ID|SESSION_ATTENDED|CHILD_SESSION|MESSAGING_\w+))$/;
+export const claudeEnv = (): NodeJS.ProcessEnv => Object.fromEntries(Object.entries(process.env).filter(([k]) => !SESSION_VARS.test(k)));
+
 async function probeClaude(): Promise<Probe> {
   const onPath = await probe('claude', ['--version']);
   const exec = process.env.CLAUDE_CODE_EXECPATH;
