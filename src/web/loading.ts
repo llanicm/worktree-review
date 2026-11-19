@@ -30,6 +30,7 @@ export async function loadView({ quiet = false } = {}) {
       const gs: CommitGroup[] = diff.commits.map((c) => ({ ...c, files: parseDiff(c.diff).map((f) => ({ ...f, commit: c.sha, commitN: c.n, uid: `${c.sha}~${f.path}` })) }));
       const unc: ViewFile[] = parseDiff(diff.uncommitted).map((f) => ({ ...f, commit: null, commitN: 0, uncommitted: true, uid: `u~${f.path}` }));
       if (unc.length) gs.push({ n: 0, sha: null, subject: 'Uncommitted changes', files: unc });
+      if (S.newestFirst) gs.reverse();
       groups = gs;
       files = gs.flatMap((g) => g.files);
     } else {

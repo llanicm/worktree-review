@@ -2,6 +2,15 @@
 import type { ApiError, PublicState } from '../shared/api.ts';
 import type { State, View } from './types.ts';
 
+// The order is a viewing preference, so it lives in this browser rather than in config.json.
+const ORDER_KEY = 'wtr.newestFirst';
+function loadNewestFirst(): boolean {
+  try { return localStorage.getItem(ORDER_KEY) === '1'; } catch { return false; }
+}
+export function saveNewestFirst(on: boolean): void {
+  try { localStorage.setItem(ORDER_KEY, on ? '1' : '0'); } catch {}
+}
+
 export const S: State = {
   st: null,
   selId: null,
@@ -27,6 +36,7 @@ export const S: State = {
   blameOn: new Set(),
   fileBlame: new Map(),
   reviewBarOpen: new Map(),
+  newestFirst: loadNewestFirst(),
   openBodies: new Set(),
   removeErrors: {},
   seenJobs: new Set(),
