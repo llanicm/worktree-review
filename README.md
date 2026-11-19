@@ -228,6 +228,8 @@ TypeScript tests directly.
 
 ```sh
 npm install
+npm start           # build into .build/ and run the dashboard on your own worktrees at http://localhost:4747
+npm run dev         # rebuild and restart as you edit, at http://localhost:4749 with its own data in .dev-data/
 npm run watch       # rebuild into .build/ (git-ignored) as you edit
 npm run demo        # try it on a made-up repo at http://localhost:4848 (prints how to stop it)
 npm test            # build into .build/, then the smoke test
