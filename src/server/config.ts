@@ -14,7 +14,7 @@ export const DEFAULT_CONFIG: Config = {
   // Worktrees touched within this many days count as "recent".
   recentDays: 3,
   prPollMinutes: 5,
-  // Editor for "open" links: vscode, cursor, windsurf, zed, or none.
+  // Editor for "open" links: vscode, cursor, windsurf, zed, webstorm, or none.
   editor: 'vscode',
   // Effort preselected for Claude code reviews: low, medium, high, xhigh, or max.
   reviewEffort: 'low',
@@ -22,7 +22,7 @@ export const DEFAULT_CONFIG: Config = {
   coderabbitDeep: true,
 };
 
-export const EDITORS: readonly string[] = ['vscode', 'cursor', 'windsurf', 'zed', 'none'];
+export const EDITORS: readonly string[] = ['vscode', 'cursor', 'windsurf', 'zed', 'webstorm', 'none'];
 export const isEditor = (v: unknown): v is Editor => typeof v === 'string' && EDITORS.includes(v);
 export const EFFORTS: readonly ReviewEffort[] = ['low', 'medium', 'high', 'xhigh', 'max'];
 export const isEffort = (v: unknown): v is ReviewEffort => typeof v === 'string' && (EFFORTS as readonly string[]).includes(v);

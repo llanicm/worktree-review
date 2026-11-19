@@ -3,7 +3,7 @@
 
 // ---------- config ----------
 
-export type Editor = 'vscode' | 'cursor' | 'windsurf' | 'zed' | 'none';
+export type Editor = 'vscode' | 'cursor' | 'windsurf' | 'zed' | 'webstorm' | 'none';
 
 /** Who runs a code review: the CodeRabbit CLI, or Claude Code's built-in /code-review. */
 export type Reviewer = 'coderabbit' | 'claude';

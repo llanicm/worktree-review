@@ -186,7 +186,7 @@ dashboard: `curl -X POST -H 'x-wtr: 1' localhost:4747/api/shutdown`, then start 
 | `autoCleanup` | `true` | Remove worktrees automatically when their PR merges |
 | `recentDays` | `3` | How long a worktree counts as *Recent* |
 | `prPollMinutes` | `5` | How often PR status is checked |
-| `editor` | `"vscode"` | Target of the *open* links: `vscode`, `cursor`, `windsurf`, `zed` or `none` |
+| `editor` | `"vscode"` | Target of the *open* links: `vscode`, `cursor`, `windsurf`, `zed`, `webstorm` or `none` |
 | `reviewEffort` | `"low"` | Effort Claude's code reviews start with: `low`, `medium`, `high`, `xhigh` or `max` |
 
 Set `WTR_PORT` in your environment to use a different port.

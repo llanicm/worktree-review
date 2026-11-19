@@ -36,7 +36,7 @@ function foldersHtml() {
 }
 
 const EFFORT_OPTIONS: [string, string][] = [['low', 'Low (quickest)'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high'], ['max', 'Max (most thorough)']];
-const EDITOR_OPTIONS: [string, string][] = [['vscode', 'VS Code'], ['cursor', 'Cursor'], ['windsurf', 'Windsurf'], ['zed', 'Zed'], ['none', 'No editor links']];
+const EDITOR_OPTIONS: [string, string][] = [['vscode', 'VS Code'], ['cursor', 'Cursor'], ['windsurf', 'Windsurf'], ['zed', 'Zed'], ['webstorm', 'WebStorm'], ['none', 'No editor links']];
 
 export function setupHtml(mode: Page) {
   const state = st();
