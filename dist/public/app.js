@@ -92,12 +92,13 @@ var elapsedBetween = (a, b) => {
 };
 var tilde = (p) => S.st?.home && p.startsWith(S.st.home) ? "~" + p.slice(S.st.home.length) : p;
 var expandHome = (p) => p.startsWith("~") && S.st?.home ? S.st.home + p.slice(1) : p;
-var EDITORS = { vscode: "vscode", cursor: "cursor", windsurf: "windsurf", zed: "zed" };
-var EDITOR_NAMES = { vscode: "VS Code", cursor: "Cursor", windsurf: "Windsurf", zed: "Zed" };
+var EDITORS = { vscode: "vscode", cursor: "cursor", windsurf: "windsurf", zed: "zed", webstorm: "webstorm" };
+var EDITOR_NAMES = { vscode: "VS Code", cursor: "Cursor", windsurf: "Windsurf", zed: "Zed", webstorm: "WebStorm" };
 var editorName = () => EDITOR_NAMES[S.st?.config.editor ?? ""] || null;
 function editorLink(p, line) {
   const scheme = EDITORS[S.st?.config.editor ?? ""];
   if (!scheme) return null;
+  if (scheme === "webstorm") return `webstorm://open?file=${encodeURIComponent(p)}${line ? `&line=${line}` : ""}`;
   return scheme === "zed" ? `zed://file${p}${line ? `:${line}` : ""}` : `${scheme}://file${p}${line ? `:${line}` : ""}`;
 }
 var shortPath = (p) => {
@@ -1030,7 +1031,7 @@ function foldersHtml() {
   </div>`;
 }
 var EFFORT_OPTIONS = [["low", "Low (quickest)"], ["medium", "Medium"], ["high", "High"], ["xhigh", "Extra high"], ["max", "Max (most thorough)"]];
-var EDITOR_OPTIONS = [["vscode", "VS Code"], ["cursor", "Cursor"], ["windsurf", "Windsurf"], ["zed", "Zed"], ["none", "No editor links"]];
+var EDITOR_OPTIONS = [["vscode", "VS Code"], ["cursor", "Cursor"], ["windsurf", "Windsurf"], ["zed", "Zed"], ["webstorm", "WebStorm"], ["none", "No editor links"]];
 function setupHtml(mode) {
   const state = st();
   const I = S.integ;
