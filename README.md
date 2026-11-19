@@ -140,6 +140,10 @@ In Claude Code:
 Start a new session. The dashboard starts in the background; open it with `/worktree-review:open` or
 go to http://localhost:4747.
 
+If you start the dashboard some other way, such as from a clone or the login service below, it checks
+whether the plugin is installed and, if it isn't, offers an **Install plugin** button that installs it
+from that copy's GitHub repo. Without the plugin, reviews you send can't reach your sessions.
+
 To update, run `/plugin marketplace update worktree-review`, then `/plugin update worktree-review`.
 The next session that starts replaces the running dashboard with the new version, and open tabs
 reload themselves.
@@ -229,6 +233,8 @@ TypeScript tests directly.
 
 ```sh
 npm install
+npm start           # build into .build/ and run the dashboard on your own worktrees at http://localhost:4747
+npm run dev         # rebuild and restart as you edit, at http://localhost:4749 with its own data in .dev-data/
 npm run watch       # rebuild into .build/ (git-ignored) as you edit
 npm run demo        # try it on a made-up repo at http://localhost:4848 (prints how to stop it)
 npm test            # build into .build/, then the smoke test

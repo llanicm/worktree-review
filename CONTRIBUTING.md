@@ -20,6 +20,8 @@ for the page tests.
 
 ```sh
 npm install
+npm start           # run the dashboard on your own worktrees at http://localhost:4747
+npm run dev         # rebuild and restart as you edit, at http://localhost:4749 (data in .dev-data/)
 npm run watch       # rebuild as you edit (into .build/, which git ignores)
 npm run demo        # try it on a made-up repo at http://localhost:4848
 npm run check       # what CI runs: types, then a fresh build and the smoke test

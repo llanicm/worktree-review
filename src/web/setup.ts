@@ -1,7 +1,7 @@
 // ---------- settings & onboarding ----------
 import type { Integrations, PublicState } from '../shared/api.ts';
 import { renderMain } from './view.ts';
-import { api, errMsg, S, st } from './state.ts';
+import { api, errMsg, need, S, st } from './state.ts';
 import type { Page } from './types.ts';
 import { ago, esc, expandHome, tilde, toast } from './util.ts';
 
@@ -35,6 +35,55 @@ function foldersHtml() {
   </div>`;
 }
 
+/** The plugin's install state, with the button that installs it. Shared by the setup page and the sidebar note. */
+export function pluginHtml(compact = false) {
+  const p = st().plugin;
+  const inst = p.install;
+  const installBtn = (label: string, cls: string) => `<button class="btn ${cls}" data-act="plugin-install">${label}</button>`;
+
+  if (inst?.running) {
+    return `<p><strong>Installing the Claude Code plugin…</strong></p>`;
+  }
+  if (inst?.error) {
+    return `
+      <p class="error">The plugin didn't install: ${esc(inst.error)}</p>
+      <div class="actions">${installBtn('Try again', 'small')}</div>`;
+  }
+  if (inst?.finishedAt) {
+    return `
+      <p><strong>Plugin installed.</strong> Start a new Claude Code session so its hooks load.
+        Sessions already open won't receive reviews until they're restarted.</p>`;
+  }
+  if (p.status === 'disabled') {
+    return `<p><strong>The Claude Code plugin is installed but turned off</strong>, so reviews can't reach your sessions.
+      Turn it on with <code>/plugin enable worktree-review</code> in Claude Code.</p>`;
+  }
+  if (p.status !== 'missing') return '';
+  const projectOnly = p.projectOnly ? `<p class="muted">It's installed for one project only, so sessions in other repos can't receive reviews.</p>` : '';
+
+  if (compact) {
+    return `
+      <p>Comments can't reach Claude yet: the plugin isn't installed.</p>${projectOnly}
+      <div class="actions">
+        ${installBtn('Install plugin', 'small primary')}
+        <button class="link-btn" data-act="plugin-dismiss">Not now</button>
+      </div>`;
+  }
+  return `
+    <p><strong>The Claude Code plugin isn't installed</strong>, so reviews you send can't reach your sessions.
+      Installing it adds this dashboard's hooks to Claude Code for your user, from <code>${esc(p.source)}</code>.</p>${projectOnly}
+    <div class="actions">${installBtn('Install plugin', 'primary')}</div>`;
+}
+
+/** The sidebar reminder, shown until the plugin is installed or put off with "Not now". */
+export function renderPluginNote() {
+  const el = need('#plugin-note');
+  const p = st().plugin;
+  const show = S.page !== 'settings' && S.page !== 'welcome' && (p.install ? true : (p.status === 'missing' || p.status === 'disabled') && !p.dismissed);
+  el.hidden = !show;
+  if (show) el.innerHTML = pluginHtml(true);
+}
+
 const EFFORT_OPTIONS: [string, string][] = [['low', 'Low (quickest)'], ['medium', 'Medium'], ['high', 'High'], ['xhigh', 'Extra high'], ['max', 'Max (most thorough)']];
 const EDITOR_OPTIONS: [string, string][] = [['vscode', 'VS Code'], ['cursor', 'Cursor'], ['windsurf', 'Windsurf'], ['zed', 'Zed'], ['webstorm', 'WebStorm'], ['none', 'No editor links']];
 
@@ -56,9 +105,12 @@ export function setupHtml(mode: Page) {
 
   // 2. Claude Code
   const hookAgo = I?.claude.lastHookAt ? ago(I.claude.lastHookAt) : null;
-  steps.push(stepHtml(!I ? ICON_WAIT : (state.sessions.length || hookAgo) ? ICON_OK : ICON_TODO, 'Claude Code',
+  const plugin = state.plugin;
+  const missing = (plugin.status === 'missing' || plugin.status === 'disabled') && !plugin.install?.finishedAt;
+  steps.push(stepHtml(!I ? ICON_WAIT : missing ? ICON_TODO : (state.sessions.length || hookAgo || plugin.status === 'installed') ? ICON_OK : ICON_TODO, 'Claude Code',
     `<p>${state.sessions.length} live session${state.sessions.length === 1 ? '' : 's'}.
       Reviews you send are handed to the session working in that worktree when it finishes its current turn, or with your next message to it.</p>
+     ${pluginHtml()}
      <p class="muted">${hookAgo ? `Last heard from a session's hook ${hookAgo}.` : "Haven't heard from a session's hook yet. That happens the next time you send a message in a session started after installing the plugin."}</p>`));
 
   // 3. GitHub
@@ -142,7 +194,7 @@ export function setupHtml(mode: Page) {
 
 export function setupSig(s: PublicState) {
   if (S.page === 'cleanup') return JSON.stringify([s.jobs, s.worktrees.map((w) => [w.id, w.cleanup, w.busy, w.sessions.length, w.agents.length, w.pr?.state])]);
-  return JSON.stringify([s.coderabbitLogin, s.config, s.repos, s.sessions.length, s.worktrees.length, s.onboardedAt]);
+  return JSON.stringify([s.coderabbitLogin, s.config, s.repos, s.sessions.length, s.worktrees.length, s.onboardedAt, s.plugin]);
 }
 
 // The patch comes from a data-cfg attribute or the folder lists, so its keys are dynamic.
