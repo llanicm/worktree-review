@@ -359,6 +359,11 @@ export const actions: Record<string, Action> = {
   recheck: () => { S.integ = null; renderMain(); return loadIntegrations(true); },
   'copy-text': (el) => copy(attr(el, 'text')),
   'cr-login': async () => { await api('POST', '/api/integrations/coderabbit/login'); },
+  'plugin-install': async () => {
+    if (!confirm(`Install the Worktree Review plugin into Claude Code for your user, from ${st().plugin.source}?`)) return;
+    await api('POST', '/api/plugin/install');
+  },
+  'plugin-dismiss': async () => { await api('POST', '/api/plugin/dismiss'); },
   'cr-logout': async () => {
     if (!confirm('Sign out of the CodeRabbit CLI on this machine?')) return;
     S.integ = await api<Integrations>('POST', '/api/integrations/coderabbit/logout');

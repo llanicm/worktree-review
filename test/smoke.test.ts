@@ -93,6 +93,21 @@ test('state lists the demo worktrees, sessions and PRs', async () => {
   assert.equal(st.cleaned.length, 1);
 });
 
+// Before any hook has called in, so the plugin is only known from `claude plugin list`.
+test('plugin: missing until installed from the page, then installed', async () => {
+  const plugin = await until(async () => { const p = (await state()).plugin; return p.status !== 'unknown' && p; }, 'the plugin check');
+  assert.equal(plugin.status, 'missing');
+  assert.equal(plugin.install, null);
+  assert.equal((await api('POST', '/api/plugin/install', {}, {})).status, 403, 'installing needs x-wtr');
+  await post('/api/plugin/dismiss');
+  assert.equal((await state()).plugin.dismissed, true);
+  assert.equal((await post('/api/plugin/install')).running, true);
+  const done = await until(async () => { const p = (await state()).plugin; return !p.install?.running && p; }, 'the plugin install');
+  assert.equal(done.install.error, null);
+  assert.equal(done.status, 'installed');
+  assert.equal(fs.readFileSync(path.join(DEMO, 'home', '.claude', 'demo-plugin-installed'), 'utf8'), done.source, 'installed from the source it showed');
+});
+
 test('cleanup status explains each worktree', async () => {
   const by = Object.fromEntries((await state()).worktrees.map((w: Json) => [w.branch, w.cleanup]));
   assert.equal(by.main, null);

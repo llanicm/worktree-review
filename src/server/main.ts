@@ -14,6 +14,7 @@ import { registerServer } from './jobs.ts';
 import { refreshSessions } from './sessions.ts';
 import { errInfo } from './exec.ts';
 import { log } from './util.ts';
+import { checkPlugin } from './plugin.ts';
 import { offerReviews } from './wake.ts';
 import { discoverWorktrees, pollWorktrees } from './worktrees.ts';
 
@@ -38,7 +39,7 @@ server.listen(PORT, '127.0.0.1', async () => {
   for (const p of state.trash) deleteInBackground(p);
   await discoverWorktrees();
   refreshSessions();
-  getIntegrations().then(changed, () => {});
+  getIntegrations().then(() => { changed(); return checkPlugin(); }).catch(() => {});
   void loop(discoverWorktrees, 30_000);
   void loop(async () => { refreshSessions(); offerReviews(); }, 3_000);
   void loop(pollWorktrees, 1_000);

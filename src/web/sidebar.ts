@@ -2,6 +2,7 @@
 import type { AgentRef, PullRequest, Session, SessionRef, Worktree } from '../shared/api.ts';
 import { NAMES, REVIEWERS } from './code-review.ts';
 import { renderJobs } from './jobs.ts';
+import { renderPluginNote } from './setup.ts';
 import { need, S, st } from './state.ts';
 import { ago, esc, md, shortPath } from './util.ts';
 
@@ -88,6 +89,7 @@ interface SectionOpts { always?: boolean; right?: string; tools?: string; hidden
 
 export function renderSidebar() {
   if (!S.st) return;
+  renderPluginNote();
   const f = S.filter.toLowerCase();
   const list = S.st.worktrees.filter((w) => !f || (w.branch || '').toLowerCase().includes(f) || w.path.toLowerCase().includes(f));
   const g = grouped(list);
