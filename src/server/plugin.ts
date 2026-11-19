@@ -30,8 +30,10 @@ export function pluginSeen(): void {
   const p = plugin();
   const was = p.seenAt ?? 0;
   p.seenAt = Date.now();
-  // Hooks run on every prompt; the file only needs to know roughly when.
-  if (Date.now() - was > 3600_000) { save(); changed(); }
+  // Hooks run on every prompt; the file only needs to know roughly when, and the page when the first
+  // one after an install arrives (a new session has loaded the hooks).
+  const firstSinceInstall = !!install?.finishedAt && was < install.finishedAt;
+  if (Date.now() - was > 3600_000 || firstSinceInstall) { save(); changed(); }
 }
 
 export function pluginInfo(): PluginInfo {
@@ -39,7 +41,9 @@ export function pluginInfo(): PluginInfo {
   // The CLI's answer when there is one: a hook also runs for a project-only or since-removed install.
   const seen = !!p.seenAt && Date.now() - p.seenAt < SEEN_FRESH;
   const status = p.disabled ? 'disabled' : p.installed === true ? 'installed' : p.installed === false ? 'missing' : seen ? 'installed' : 'unknown';
-  return { status, projectOnly: status === 'missing' && !!p.projectOnly, source, dismissed: !!p.dismissedAt, install };
+  // "Start a new session" goes once a hook calls in after the install: a new session has the hooks.
+  const done = !!install?.finishedAt && !install.error && (p.seenAt ?? 0) > install.finishedAt;
+  return { status, projectOnly: status === 'missing' && !!p.projectOnly, source, dismissed: !!p.dismissedAt, install: done ? null : install };
 }
 
 // This copy's own repo, if it's a clone of one on GitHub (a fork installs the fork), else the published one.
