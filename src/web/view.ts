@@ -59,7 +59,8 @@ export function renderMain() {
           <button data-act="mode" data-mode="commits" class="${byCommit ? 'on' : ''}" ${v.diff.commits.length || wt.dirty ? '' : 'disabled'} title="Each commit's changes in the order they were made">By commit</button>
           <button data-act="mode" data-mode="since" class="${since ? 'on' : ''}" ${v.diff.sinceAvailable ? '' : 'disabled title="Mark as reviewed first"'}>Since last review${v.diff.reviewedAt ? ` (${ago(v.diff.reviewedAt)})` : ''}</button>
         </div>
-        ${byCommit ? `<span class="progress">${v.diff.commits.length} commit${v.diff.commits.length === 1 ? '' : 's'}, oldest first</span>` : `<span class="progress">${viewedCount} / ${v.files.length} files viewed</span>`}
+        ${orderToggleHtml(v)}
+        ${byCommit ? `<span class="progress">${v.diff.commits.length} commit${v.diff.commits.length === 1 ? '' : 's'}</span>` : `<span class="progress">${viewedCount} / ${v.files.length} files viewed</span>`}
       </div>
       <div class="actions">
         ${S.stale ? '<span class="banner">New changes landed. <button class="btn small" data-act="refresh">Refresh</button></span>' : ''}
@@ -132,6 +133,13 @@ export const collapseAllHtml = (v: View) => v.diff.mode === 'commits' && (v.grou
 
 export const headerSig = (wt: Worktree) => JSON.stringify([wt.sessions, wt.agents, wt.pr, wt.cleanup, wt.ahead, wt.dirty, wt.baseRef, wt.baseError, wt.error, wt.busy, S.removeErrors[wt.id], st().sessions.length, st().config]);
 
+/** Oldest or newest first, for the commits list, By commit, and the file order in All changes. */
+function orderToggleHtml(v: View) {
+  if (!v.diff.commits.length) return '';
+  const btn = (newest: boolean, label: string) => `<button data-act="order" data-newest="${newest}" class="${S.newestFirst === newest ? 'on' : ''}" aria-pressed="${S.newestFirst === newest}">${label}</button>`;
+  return `<div class="seg small" role="group" aria-label="Order" title="Which commits, and the files they changed, come first">${btn(false, 'Oldest first')}${btn(true, 'Newest first')}</div>`;
+}
+
 function commitsHtml(commits: Commit[], wt: Worktree) {
   if (!commits.length && !wt.dirty) return '';
   const byCommit = S.view?.diff.mode === 'commits';
@@ -143,7 +151,8 @@ function commitsHtml(commits: Commit[], wt: Worktree) {
       <button class="link-btn" data-act="view-commit" data-n="${n}">view</button></div>`;
   const rows = commits.map((c) => row(c.n, c.sha, c.subject, c.time, c.body));
   if (wt.dirty) rows.push(row(0, null, `Uncommitted changes (${wt.dirty} file${wt.dirty === 1 ? '' : 's'})`, null));
-  return `<details class="panel commits-panel" ${commits.length <= 8 ? 'open' : ''}><summary class="panel-head" style="cursor:pointer">${commits.length} commit${commits.length === 1 ? '' : 's'}, oldest first
+  if (S.newestFirst) rows.reverse();
+  return `<details class="panel commits-panel" ${commits.length <= 8 ? 'open' : ''}><summary class="panel-head" style="cursor:pointer">${commits.length} commit${commits.length === 1 ? '' : 's'}, ${S.newestFirst ? 'newest' : 'oldest'} first
       ${S.hl !== null && S.hl !== undefined && canHl ? '<button class="btn small" data-act="hl-commit" data-n="">Clear highlight</button>' : ''}</summary>
     <div class="panel-body">${rows.join('')}</div></details>`;
 }
