@@ -1,7 +1,7 @@
 // End-to-end check of the server against the demo (extras/demo/demo.mjs): every API route,
 // the removal rules, hook delivery, the security checks, and the page rendering in Chrome.
 // Run with: npm test  (needs Node 22.18+ to run TypeScript directly; Chrome for the page check)
-import { test, before, after } from 'node:test';
+import { describe, test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -93,19 +93,96 @@ test('state lists the demo worktrees, sessions and PRs', async () => {
   assert.equal(st.cleaned.length, 1);
 });
 
-// Before any hook has called in, so the plugin is only known from `claude plugin list`.
-test('plugin: missing until installed from the page, then installed', async () => {
-  const plugin = await until(async () => { const p = (await state()).plugin; return p.status !== 'unknown' && p; }, 'the plugin check');
-  assert.equal(plugin.status, 'missing');
-  assert.equal(plugin.install, null);
-  assert.equal((await api('POST', '/api/plugin/install', {}, {})).status, 403, 'installing needs x-wtr');
-  await post('/api/plugin/dismiss');
-  assert.equal((await state()).plugin.dismissed, true);
-  assert.equal((await post('/api/plugin/install')).running, true);
-  const done = await until(async () => { const p = (await state()).plugin; return !p.install?.running && p; }, 'the plugin install');
-  assert.equal(done.install.error, null);
-  assert.equal(done.status, 'installed');
-  assert.equal(fs.readFileSync(path.join(DEMO, 'home', '.claude', 'demo-plugin-installed'), 'utf8'), done.source, 'installed from the source it showed');
+describe('plugin', () => {
+  const claudeDir = path.join(DEMO, 'home', '.claude');
+  const listed = path.join(claudeDir, 'demo-plugin-list.json');
+  const entry = (scope: string, enabled = true) => ({ id: 'worktree-review@worktree-review', version: '0.0.0', scope, enabled });
+  const plugin = async () => (await state()).plugin;
+  const hook = () => post('/api/hook', { session_id: 'plugin-test', cwd: repo });
+  /** Has the server ask `claude plugin list` again, and waits for its answer. */
+  const recheck = async (status: string) => {
+    await get('/api/integrations?refresh=1');
+    return until(async () => { const p = await plugin(); return p.status === status && p; }, `the plugin to show as ${status}`);
+  };
+
+  after(() => fs.rmSync(listed, { force: true }));
+
+  describe('before it is installed', () => {
+    test('shows as missing', async () => {
+      await until(async () => (await plugin()).status !== 'unknown', 'the first plugin check');
+      assert.equal((await plugin()).status, 'missing');
+    });
+
+    test('needs x-wtr to install', async () => {
+      assert.equal((await api('POST', '/api/plugin/install', {}, {})).status, 403);
+    });
+
+    test('Not now puts off the reminder', async () => {
+      await post('/api/plugin/dismiss');
+      assert.equal((await plugin()).dismissed, true);
+    });
+  });
+
+  describe('installing it', () => {
+    before(async () => {
+      await post('/api/plugin/install');
+      await until(async () => !(await plugin()).install?.running, 'the plugin install');
+    });
+
+    test('finishes without an error', async () => {
+      assert.equal((await plugin()).install.error, null);
+    });
+
+    test('shows as installed', async () => {
+      assert.equal((await plugin()).status, 'installed');
+    });
+
+    test('installs from the source the page showed', async () => {
+      assert.equal(fs.readFileSync(path.join(claudeDir, 'demo-plugin-installed'), 'utf8'), (await plugin()).source);
+    });
+
+    test('says to start a new session', async () => {
+      assert.ok((await plugin()).install.finishedAt);
+    });
+
+    test('stops saying so once a hook calls in', async () => {
+      await hook();
+      await until(async () => (await plugin()).install === null, 'the install note to clear');
+    });
+  });
+
+  describe('the check', () => {
+    test('counts a user install as installed', async () => {
+      fs.writeFileSync(listed, JSON.stringify([entry('user')]));
+      await recheck('installed');
+    });
+
+    test('counts an install synced by claude.ai as installed', async () => {
+      fs.writeFileSync(listed, JSON.stringify([entry('synced')]));
+      await recheck('installed');
+    });
+
+    test('counts a project-only install as missing', async () => {
+      fs.writeFileSync(listed, JSON.stringify([entry('project')]));
+      await recheck('missing');
+    });
+
+    test('says when it is installed for one project only', async () => {
+      fs.writeFileSync(listed, JSON.stringify([entry('local')]));
+      assert.equal((await recheck('missing')).projectOnly, true);
+    });
+
+    test('says a turned-off install is disabled, not missing', async () => {
+      fs.writeFileSync(listed, JSON.stringify([entry('user', false)]));
+      await recheck('disabled');
+    });
+
+    test('shows an uninstall as missing, even after a recent hook', async () => {
+      fs.writeFileSync(listed, '[]');
+      await hook();
+      await recheck('missing');
+    });
+  });
 });
 
 test('cleanup status explains each worktree', async () => {
