@@ -493,6 +493,21 @@ test('settings: integrations, config, folders, onboarding', async () => {
   assert.ok((await state()).onboardedAt);
 });
 
+test('ignored repos and their worktrees are left out, and come back when shown again', async () => {
+  const before = (await state()).worktrees.length;
+  const withPRs = (await state()).worktrees.filter((w: Json) => w.pr).length;
+  assert.ok((await state()).repos.some((r: Json) => r.name === 'shop'));
+  await post('/api/config', { ignoreRepos: ['~/code/shop'] });
+  const hidden = await state();
+  assert.deepEqual(hidden.config.ignoreRepos, ['~/code/shop']);
+  assert.ok(!hidden.repos.some((r: Json) => r.name === 'shop'), 'repo left out');
+  assert.ok(!hidden.worktrees.some((w: Json) => w.path.startsWith(repo)), 'its worktrees left out');
+  assert.equal((await api('POST', '/api/config', { ignoreRepos: 'shop' })).status, 400);
+  await post('/api/config', { ignoreRepos: [] });
+  await until(async () => (await state()).worktrees.length === before, 'the worktrees coming back');
+  await until(async () => (await state()).worktrees.filter((w: Json) => w.pr).length === withPRs, 'their PRs being fetched again');
+});
+
 test('security: mutations need x-wtr, and only localhost hosts are served', async () => {
   assert.equal((await api('POST', '/api/config', { recentDays: 4 }, {})).status, 403);
   // fetch won't send a different Host header, so use http directly.

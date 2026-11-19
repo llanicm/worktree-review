@@ -67,7 +67,7 @@ export function publicState(): PublicState {
     prError,
     config: {
       autoCleanup: config.autoCleanup, recentDays: config.recentDays, editor: config.editor,
-      prPollMinutes: config.prPollMinutes, roots: config.roots, extraRepos: config.extraRepos, reviewEffort: config.reviewEffort,
+      prPollMinutes: config.prPollMinutes, roots: config.roots, extraRepos: config.extraRepos, ignoreRepos: config.ignoreRepos, reviewEffort: config.reviewEffort,
       coderabbitDeep: config.coderabbitDeep,
     },
     onboardedAt: state.onboardedAt || null,

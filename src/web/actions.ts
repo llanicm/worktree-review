@@ -381,6 +381,12 @@ export const actions: Record<string, Action> = {
     await saveConfig({ [key]: [...st().config[key], d.path] });
     closePicker();
   },
+  'ignore-repo': (el) => {
+    const p = attr(el, 'path');
+    if (st().config.ignoreRepos.includes(p)) return;
+    return saveConfig({ ignoreRepos: [...st().config.ignoreRepos, p] });
+  },
+  'unignore-repo': (el) => saveConfig({ ignoreRepos: st().config.ignoreRepos.filter((p) => p !== el.dataset.path) }),
   'remove-folder': (el) => {
     const key = el.dataset.key;
     if (key !== 'roots' && key !== 'extraRepos') return;
