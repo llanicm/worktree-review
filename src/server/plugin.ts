@@ -10,7 +10,7 @@ import { asStr, isRecord, log, rec } from './util.ts';
 // ---------- the Claude Code plugin ----------
 // Reviews reach sessions through the plugin's hooks, so a dashboard started by hand (npm start, the
 // login service) works but can't deliver anything until the plugin is installed for the user.
-// `claude plugin list` says so, asked at most once a day and after an install; a hook calling in
+// `claude plugin list` says so, asked at start, daily and after an install; a hook calling in
 // stands in only when the CLI can't be asked.
 
 const NAME = 'worktree-review';
@@ -60,7 +60,6 @@ async function findSource(): Promise<void> {
 export async function checkPlugin(force = false): Promise<void> {
   await findSource();
   const p = plugin();
-  if (p.seenAt && Date.now() - p.seenAt < SEEN_FRESH) return;
   if (!force && p.checkedAt && Date.now() - p.checkedAt < CHECK_EVERY) return;
   let out: string;
   try { out = await run(claudeBin(), ['plugin', 'list', '--json'], { env: claudeEnv(), timeout: 30_000 }); } catch { return; }
