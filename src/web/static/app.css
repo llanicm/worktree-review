@@ -214,6 +214,7 @@ h1 .pr-no { color: var(--fg-muted); font-weight: 400; }
 .seg button + button { border-left: 1px solid var(--border); }
 .seg button.on { background: var(--accent); color: #fff; }
 .seg button:disabled { opacity: .45; cursor: default; }
+.seg.small button { padding: 3px 9px; font-size: 12px; }
 .progress { font-size: 13px; color: var(--fg-muted); }
 .banner {
   background: var(--accent-soft);

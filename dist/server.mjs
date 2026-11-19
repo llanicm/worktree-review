@@ -156,14 +156,14 @@ var DEFAULT_CONFIG = {
   // Worktrees touched within this many days count as "recent".
   recentDays: 3,
   prPollMinutes: 5,
-  // Editor for "open" links: vscode, cursor, windsurf, zed, or none.
+  // Editor for "open" links: vscode, cursor, windsurf, zed, webstorm, or none.
   editor: "vscode",
   // Effort preselected for Claude code reviews: low, medium, high, xhigh, or max.
   reviewEffort: "low",
   // Review with CodeRabbit's GitHub PR review policy (--deep) rather than its lighter local one.
   coderabbitDeep: true
 };
-var EDITORS = ["vscode", "cursor", "windsurf", "zed", "none"];
+var EDITORS = ["vscode", "cursor", "windsurf", "zed", "webstorm", "none"];
 var isEditor = (v) => typeof v === "string" && EDITORS.includes(v);
 var EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 var isEffort = (v) => typeof v === "string" && EFFORTS.includes(v);

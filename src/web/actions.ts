@@ -12,7 +12,7 @@ import { closePicker, openPicker } from './picker.ts';
 import { closeResult, showResult } from './result.ts';
 import { loadIntegrations, saveConfig } from './setup.ts';
 import { defaultWorktree, renderSidebar } from './sidebar.ts';
-import { api, curWt, errMsg, need, S, st, view } from './state.ts';
+import { api, curWt, errMsg, need, S, saveNewestFirst, st, view } from './state.ts';
 import { copy, expandHome, fnv, toast } from './util.ts';
 import { renderMain } from './view.ts';
 import { redrawHeaderMeta } from './header.ts';
@@ -152,6 +152,13 @@ export const actions: Record<string, Action> = {
     if (!f) return;
     if (isCollapsed(f)) { S.toggled.set(f.uid, false); renderMain(); }
     document.getElementById(`f-${fnv(f.uid)}`)?.scrollIntoView({ block: 'start' });
+  },
+  order: (el) => {
+    const newest = el.dataset.newest === 'true';
+    if (newest === S.newestFirst) return;
+    S.newestFirst = newest;
+    saveNewestFirst(newest);
+    loadView({ quiet: true });
   },
   mode: (el, e) => {
     e.preventDefault();
