@@ -28,12 +28,13 @@ export const elapsedBetween = (a: number, b: number | null) => { const s = Math.
 
 export const tilde = (p: string) => (S.st?.home && p.startsWith(S.st.home) ? '~' + p.slice(S.st.home.length) : p);
 export const expandHome = (p: string) => (p.startsWith('~') && S.st?.home ? S.st.home + p.slice(1) : p);
-const EDITORS: Record<string, string> = { vscode: 'vscode', cursor: 'cursor', windsurf: 'windsurf', zed: 'zed' };
-const EDITOR_NAMES: Record<string, string> = { vscode: 'VS Code', cursor: 'Cursor', windsurf: 'Windsurf', zed: 'Zed' };
+const EDITORS: Record<string, string> = { vscode: 'vscode', cursor: 'cursor', windsurf: 'windsurf', zed: 'zed', webstorm: 'webstorm' };
+const EDITOR_NAMES: Record<string, string> = { vscode: 'VS Code', cursor: 'Cursor', windsurf: 'Windsurf', zed: 'Zed', webstorm: 'WebStorm' };
 export const editorName = () => EDITOR_NAMES[S.st?.config.editor ?? ''] || null;
 export function editorLink(p: string, line?: number) {
   const scheme = EDITORS[S.st?.config.editor ?? ''];
   if (!scheme) return null;
+  if (scheme === 'webstorm') return `webstorm://open?file=${encodeURIComponent(p)}${line ? `&line=${line}` : ''}`;
   return scheme === 'zed' ? `zed://file${p}${line ? `:${line}` : ''}` : `${scheme}://file${p}${line ? `:${line}` : ''}`;
 }
 export const shortPath = (p: string) => { const parts = tilde(p).split('/'); return parts.length > 3 ? '…/' + parts.slice(-2).join('/') : tilde(p); };
