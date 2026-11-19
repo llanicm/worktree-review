@@ -40,9 +40,8 @@ fills in as you scroll or while the page is idle.
 Commits are numbered oldest first, each with its own colour. In **All changes**, files are ordered by
 the commit that first touched them, and every added line has a bar in the colour of the commit that
 introduced it. Click a commit to highlight its lines. **By commit** replays the branch one commit at
-a time, with each commit's full message, and ends with the uncommitted changes. Switch to **Newest first** to
-put the uncommitted changes and the latest commit at the top, with the most recently changed files first in
-**All changes**.
+a time, with each commit's full message, and ends with the uncommitted changes. Switch it to **Newest first** to
+put the uncommitted changes and the latest commit at the top.
 
 ![By commit view: each commit as its own section with its message and changes](docs/screenshots/by-commit.png)
 

@@ -133,11 +133,11 @@ export const collapseAllHtml = (v: View) => v.diff.mode === 'commits' && (v.grou
 
 export const headerSig = (wt: Worktree) => JSON.stringify([wt.sessions, wt.agents, wt.pr, wt.cleanup, wt.ahead, wt.dirty, wt.baseRef, wt.baseError, wt.error, wt.busy, S.removeErrors[wt.id], st().sessions.length, st().config]);
 
-/** Oldest or newest first, for the commits list, By commit, and the file order in All changes. */
+/** Oldest or newest first, for By commit and the commits list. All changes keeps one stable order. */
 function orderToggleHtml(v: View) {
-  if (!v.diff.commits.length) return '';
+  if (v.diff.mode !== 'commits' || !v.diff.commits.length) return '';
   const btn = (newest: boolean, label: string) => `<button data-act="order" data-newest="${newest}" class="${S.newestFirst === newest ? 'on' : ''}" aria-pressed="${S.newestFirst === newest}">${label}</button>`;
-  return `<div class="seg small" role="group" aria-label="Order" title="Which commits, and the files they changed, come first">${btn(false, 'Oldest first')}${btn(true, 'Newest first')}</div>`;
+  return `<div class="seg small" role="group" aria-label="Order" title="Which commits come first">${btn(false, 'Oldest first')}${btn(true, 'Newest first')}</div>`;
 }
 
 function commitsHtml(commits: Commit[], wt: Worktree) {

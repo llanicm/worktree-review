@@ -34,13 +34,10 @@ export async function loadView({ quiet = false } = {}) {
       groups = gs;
       files = gs.flatMap((g) => g.files);
     } else {
-      // Oldest first: by the first commit that touched each file, uncommitted-only files last.
-      // Newest first: by the last commit that touched it, files with uncommitted changes first.
+      // Order files by the first commit that touched them; uncommitted-only files last.
       const first = (p: string) => { const ns = (diff.fileCommits?.[p] || []).filter((n) => n > 0); return ns.length ? Math.min(...ns) : Infinity; };
-      const last = (p: string) => { const ns = diff.fileCommits?.[p] || []; return ns.includes(0) || !ns.length ? -Infinity : -Math.max(...ns); };
-      const key = S.newestFirst ? last : first;
       files = parseDiff(diff.diff).map((f): ViewFile => ({ ...f, commit: null, uid: f.path }))
-        .map((f, i) => ({ f, i, k: key(f.path) })).sort((a, b) => a.k - b.k || a.i - b.i).map((x) => x.f);
+        .map((f, i) => ({ f, i, k: first(f.path) })).sort((a, b) => a.k - b.k || a.i - b.i).map((x) => x.f);
     }
     const prev = S.view;
     const v: View = { wtId: wt.id, diff, files, groups, comments: cm.comments, reviews: cm.reviews, commentSig: wt.comments.sig, crSig: reviewsSig(wt), prSig: prSig(wt), blame: prev?.wtId === wt.id && prev.blame?.fingerprint === diff.fingerprint ? prev.blame : null };
