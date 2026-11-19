@@ -54,11 +54,16 @@ export function pluginHtml(compact = false) {
       <p><strong>Plugin installed.</strong> Start a new Claude Code session so its hooks load.
         Sessions already open won't receive reviews until they're restarted.</p>`;
   }
+  if (p.status === 'disabled') {
+    return `<p><strong>The Claude Code plugin is installed but turned off</strong>, so reviews can't reach your sessions.
+      Turn it on with <code>/plugin enable worktree-review</code> in Claude Code.</p>`;
+  }
   if (p.status !== 'missing') return '';
+  const projectOnly = p.projectOnly ? `<p class="muted">It's installed for one project only, so sessions in other repos can't receive reviews.</p>` : '';
 
   if (compact) {
     return `
-      <p>Comments can't reach Claude yet: the plugin isn't installed.</p>
+      <p>Comments can't reach Claude yet: the plugin isn't installed.</p>${projectOnly}
       <div class="actions">
         ${installBtn('Install plugin', 'small primary')}
         <button class="link-btn" data-act="plugin-dismiss">Not now</button>
@@ -66,7 +71,7 @@ export function pluginHtml(compact = false) {
   }
   return `
     <p><strong>The Claude Code plugin isn't installed</strong>, so reviews you send can't reach your sessions.
-      Installing it adds this dashboard's hooks to Claude Code for your user, from <code>${esc(p.source)}</code>.</p>
+      Installing it adds this dashboard's hooks to Claude Code for your user, from <code>${esc(p.source)}</code>.</p>${projectOnly}
     <div class="actions">${installBtn('Install plugin', 'primary')}</div>`;
 }
 
@@ -74,7 +79,7 @@ export function pluginHtml(compact = false) {
 export function renderPluginNote() {
   const el = need('#plugin-note');
   const p = st().plugin;
-  const show = S.page !== 'settings' && S.page !== 'welcome' && (p.install ? true : p.status === 'missing' && !p.dismissed);
+  const show = S.page !== 'settings' && S.page !== 'welcome' && (p.install ? true : (p.status === 'missing' || p.status === 'disabled') && !p.dismissed);
   el.hidden = !show;
   if (show) el.innerHTML = pluginHtml(true);
 }
@@ -101,7 +106,7 @@ export function setupHtml(mode: Page) {
   // 2. Claude Code
   const hookAgo = I?.claude.lastHookAt ? ago(I.claude.lastHookAt) : null;
   const plugin = state.plugin;
-  const missing = plugin.status === 'missing' && !plugin.install?.finishedAt;
+  const missing = (plugin.status === 'missing' || plugin.status === 'disabled') && !plugin.install?.finishedAt;
   steps.push(stepHtml(!I ? ICON_WAIT : missing ? ICON_TODO : (state.sessions.length || hookAgo || plugin.status === 'installed') ? ICON_OK : ICON_TODO, 'Claude Code',
     `<p>${state.sessions.length} live session${state.sessions.length === 1 ? '' : 's'}.
       Reviews you send are handed to the session working in that worktree when it finishes its current turn, or with your next message to it.</p>

@@ -215,8 +215,10 @@ export interface CodeRabbitLogin {
 
 /** Whether the Claude Code plugin is installed, so reviews can reach sessions. */
 export interface PluginInfo {
-  /** 'unknown' until it's been checked, or when the claude CLI couldn't say. */
-  status: 'installed' | 'missing' | 'unknown';
+  /** 'unknown' until it's been checked, or when the claude CLI couldn't say. Only a user-wide install counts. */
+  status: 'installed' | 'missing' | 'disabled' | 'unknown';
+  /** Missing for the user, but installed for a single project, whose sessions are the only ones with the hooks. */
+  projectOnly: boolean;
   /** The GitHub repo an install comes from, as owner/name. */
   source: string;
   /** The reminder was put off with "Not now". */
