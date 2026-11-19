@@ -39,16 +39,35 @@ function foldersHtml() {
 export function pluginHtml(compact = false) {
   const p = st().plugin;
   const inst = p.install;
-  if (inst?.running) return `<p><strong>Installing the Claude Code plugin…</strong></p>`;
-  if (inst?.error) return `<p class="error">The plugin didn't install: ${esc(inst.error)}</p>
-    <div class="actions"><button class="btn small" data-act="plugin-install">Try again</button></div>`;
-  if (inst?.finishedAt) return `<p><strong>Plugin installed.</strong> Start a new Claude Code session so its hooks load. Sessions already open won't receive reviews until they're restarted.</p>`;
+  const installBtn = (label: string, cls: string) => `<button class="btn ${cls}" data-act="plugin-install">${label}</button>`;
+
+  if (inst?.running) {
+    return `<p><strong>Installing the Claude Code plugin…</strong></p>`;
+  }
+  if (inst?.error) {
+    return `
+      <p class="error">The plugin didn't install: ${esc(inst.error)}</p>
+      <div class="actions">${installBtn('Try again', 'small')}</div>`;
+  }
+  if (inst?.finishedAt) {
+    return `
+      <p><strong>Plugin installed.</strong> Start a new Claude Code session so its hooks load.
+        Sessions already open won't receive reviews until they're restarted.</p>`;
+  }
   if (p.status !== 'missing') return '';
-  return compact
-    ? `<p>Comments can't reach Claude yet: the plugin isn't installed.</p>
-      <div class="actions"><button class="btn small primary" data-act="plugin-install">Install plugin</button><button class="link-btn" data-act="plugin-dismiss">Not now</button></div>`
-    : `<p><strong>The Claude Code plugin isn't installed</strong>, so reviews you send can't reach your sessions. Installing it adds this dashboard's hooks to Claude Code for your user, from <code>${esc(p.source)}</code>.</p>
-      <div class="actions"><button class="btn primary" data-act="plugin-install">Install plugin</button></div>`;
+
+  if (compact) {
+    return `
+      <p>Comments can't reach Claude yet: the plugin isn't installed.</p>
+      <div class="actions">
+        ${installBtn('Install plugin', 'small primary')}
+        <button class="link-btn" data-act="plugin-dismiss">Not now</button>
+      </div>`;
+  }
+  return `
+    <p><strong>The Claude Code plugin isn't installed</strong>, so reviews you send can't reach your sessions.
+      Installing it adds this dashboard's hooks to Claude Code for your user, from <code>${esc(p.source)}</code>.</p>
+    <div class="actions">${installBtn('Install plugin', 'primary')}</div>`;
 }
 
 /** The sidebar reminder, shown until the plugin is installed or put off with "Not now". */
