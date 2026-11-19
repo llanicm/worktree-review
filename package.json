@@ -9,6 +9,8 @@
   },
   "scripts": {
     "build": "node build.mjs",
+    "start": "node build.mjs --out .build && node .build/server.mjs",
+    "dev": "node build.mjs --out .build && (node build.mjs --watch --out .build & WTR_PORT=4749 WTR_DATA_DIR=.dev-data node --watch .build/server.mjs)",
     "typecheck": "tsc -p src/server && tsc -p src/web && tsc -p src/web/worker && tsc -p test",
     "watch": "node build.mjs --watch --out .build",
     "demo": "node build.mjs --out .build && WTR_DIST=.build node extras/demo/demo.mjs",
