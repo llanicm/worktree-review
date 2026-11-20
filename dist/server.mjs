@@ -151,6 +151,8 @@ var DEFAULT_CONFIG = {
   roots: [],
   // Extra repo paths to always include.
   extraRepos: [],
+  // Repos to leave out even when sessions work in them, by the path of their main checkout.
+  ignoreRepos: [],
   // Remove a worktree automatically once its PR is merged (only when safe).
   autoCleanup: true,
   // Worktrees touched within this many days count as "recent".
@@ -174,6 +176,7 @@ function loadConfig() {
   return {
     roots: isStringArray(o.roots) ? o.roots : d.roots,
     extraRepos: isStringArray(o.extraRepos) ? o.extraRepos : d.extraRepos,
+    ignoreRepos: isStringArray(o.ignoreRepos) ? o.ignoreRepos : d.ignoreRepos,
     autoCleanup: typeof o.autoCleanup === "boolean" ? o.autoCleanup : d.autoCleanup,
     recentDays: typeof o.recentDays === "number" ? o.recentDays : d.recentDays,
     prPollMinutes: typeof o.prPollMinutes === "number" ? o.prPollMinutes : d.prPollMinutes,
@@ -330,9 +333,23 @@ function recentClaudeCwds() {
   claudeCwds = { at: Date.now(), dirs: [...dirs].filter((d) => fs5.existsSync(d)) };
   return claudeCwds.dirs;
 }
+function ignoredRoots() {
+  const out = /* @__PURE__ */ new Set();
+  for (const p of config.ignoreRepos) {
+    const full = path2.resolve(expand(p));
+    out.add(full);
+    try {
+      out.add(fs5.realpathSync(full));
+    } catch {
+    }
+  }
+  return out;
+}
 async function discoverRepos() {
+  const ignored = ignoredRoots();
+  for (const [k, r] of repos) if (ignored.has(r.root)) repos.delete(k);
   const candidates = new Set(config.extraRepos.map(expand));
-  const known = [...wts.values()].map((w) => w.path);
+  const known = [...wts.values()].map((w) => w.path).concat([...ignored]);
   for (const dir of recentClaudeCwds()) {
     if (known.some((p) => dir === p || dir.startsWith(p + "/"))) continue;
     try {
@@ -365,6 +382,7 @@ async function discoverRepos() {
       const common = fs5.realpathSync(path2.resolve(p, (await git(p, ["rev-parse", "--git-common-dir"])).trim()));
       if (repos.has(common)) continue;
       const mainDir = path2.basename(common) === ".git" ? path2.dirname(common) : p;
+      if (ignored.has(fs5.existsSync(mainDir) ? mainDir : p)) continue;
       const repo = { root: fs5.existsSync(mainDir) ? mainDir : p, commonDir: common, name: path2.basename(mainDir).replace(/\.git$/, ""), gh: null, defaultBase: "origin/main" };
       try {
         const url = (await git(p, ["remote", "get-url", "origin"])).trim();
@@ -1806,6 +1824,7 @@ function publicState() {
       prPollMinutes: config.prPollMinutes,
       roots: config.roots,
       extraRepos: config.extraRepos,
+      ignoreRepos: config.ignoreRepos,
       reviewEffort: config.reviewEffort,
       coderabbitDeep: config.coderabbitDeep
     },
@@ -2537,6 +2556,12 @@ async function updateConfig(body) {
         continue;
       }
       config[k] = [...new Set(v.map((p) => p.trim()).filter(Boolean))];
+    } else if (k === "ignoreRepos") {
+      if (!isStringArray(v)) {
+        errors.push(`Invalid value for ${k}`);
+        continue;
+      }
+      config.ignoreRepos = [...new Set(v.map((p) => p.trim()).filter(Boolean))];
     } else if (k === "autoCleanup" || k === "coderabbitDeep") {
       if (typeof v !== "boolean") {
         errors.push(`Invalid value for ${k}`);
@@ -2571,7 +2596,12 @@ async function updateConfig(body) {
   }
   if (errors.length) throw httpError(400, errors.join("; "));
   fs14.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n");
-  if ("roots" in patch || "extraRepos" in patch) await discoverWorktrees();
+  if ("roots" in patch || "extraRepos" in patch || "ignoreRepos" in patch) {
+    await discoverWorktrees();
+    refreshSessions();
+    void refreshPRs().then(changed, () => {
+    });
+  }
   changed();
 }
 var SKIP_DIRS = /* @__PURE__ */ new Set(["node_modules", ".git", ".Trash", "Library", ".cache", ".npm", ".pnpm-store"]);
