@@ -831,3 +831,46 @@ describe('commit order', { skip: !fs.existsSync(process.env.CHROME || '/Applicat
     });
   });
 });
+
+describe('installing as an app', () => {
+  describe('the manifest', () => {
+    let res: Response;
+    let manifest: Json;
+
+    before(async () => {
+      res = await fetch(`${BASE}/manifest.webmanifest`);
+      manifest = await res.json();
+    });
+
+    test('is served as a web app manifest', () => {
+      assert.equal(res.headers.get('content-type'), 'application/manifest+json');
+    });
+
+    test('opens in a window of its own', () => {
+      assert.equal(manifest.display, 'standalone');
+    });
+
+    test('serves every icon it lists', async () => {
+      for (const icon of manifest.icons) {
+        const r = await fetch(`${BASE}${icon.src}`);
+        assert.equal(r.status, 200, icon.src);
+        assert.equal(r.headers.get('content-type'), icon.type, icon.src);
+      }
+    });
+  });
+
+  describe('in Chrome', { skip: !fs.existsSync(process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome') && 'Chrome not found' }, () => {
+    let page: Awaited<ReturnType<typeof openPage>>;
+
+    before(async () => {
+      page = await openPage(`${BASE}/`);
+      await page.waitFor("document.readyState === 'complete' && !!document.querySelector('link[rel=manifest]')");
+    });
+    after(() => page.close());
+
+    test('can be installed', async () => {
+      const { result } = await page.send('Page.getInstallabilityErrors');
+      assert.deepEqual(result.installabilityErrors, []);
+    });
+  });
+});
