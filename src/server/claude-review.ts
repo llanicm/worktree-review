@@ -3,7 +3,7 @@ import type { CodeReview, Finding, ReviewEffort } from '../shared/api.ts';
 import { addSnippet, assertIdle, beginReview, runReview, startInBackground } from './code-review.ts';
 import { config, isEffort } from './config.ts';
 import { httpError } from './exec.ts';
-import { claudeBin, claudeReady, getIntegrations } from './integrations.ts';
+import { claudeBin, claudeEnv, claudeReady, getIntegrations } from './integrations.ts';
 import type { WorktreeRecord } from './types.ts';
 import { asStr, newId, rec } from './util.ts';
 import { refreshWorktree } from './worktrees.ts';
@@ -41,10 +41,6 @@ const SCHEMA = {
 const prompt = (base: string): string => `Run the code-review skill (Skill tool, args: "${base}") on this worktree: its changes against ${base}, \
 including uncommitted and untracked files. Don't change any files. Then return every finding it reports as structured output, \
 with file paths relative to the repository root and line numbers in the current version of each file.`;
-
-// The server inherits the environment of the session whose hook started it. These would tie the reviewer to that session.
-const SESSION_VARS = /^(CLAUDECODE|CLAUDE_PID|CLAUDE_EFFORT|CLAUDE_CODE_(ENTRYPOINT|SESSION_ID|SESSION_ATTENDED|CHILD_SESSION|MESSAGING_\w+))$/;
-const reviewerEnv = (): NodeJS.ProcessEnv => Object.fromEntries(Object.entries(process.env).filter(([k]) => !SESSION_VARS.test(k)));
 
 /** A one-line account of what the reviewer is doing, from a tool call. */
 function activity(wt: WorktreeRecord, name: string, input: Record<string, unknown>): string {
@@ -103,7 +99,7 @@ function runClaude(wt: WorktreeRecord, review: CodeReview, effort: ReviewEffort,
     '--output-format', 'stream-json', '--verbose',
     '--json-schema', JSON.stringify(SCHEMA),
   ], {
-    env: reviewerEnv(),
+    env: claudeEnv(),
     onEvent: (ev) => {
       if (ev.type === 'assistant') {
         const content = rec(ev.message).content;

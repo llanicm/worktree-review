@@ -5,6 +5,7 @@ import { config } from './config.ts';
 import { claudeReady, coderabbitReady, crLogin } from './integrations.ts';
 import { jobs } from './jobs.ts';
 import { HOME, PORT, VERSION } from './paths.ts';
+import { pluginInfo } from './plugin.ts';
 import { prThreadsSummary } from './pr-threads.ts';
 import { prError } from './prs.ts';
 import { repos, sessions, state, takeChanged, wts } from './state.ts';
@@ -76,6 +77,7 @@ export function publicState(): PublicState {
     jobs: jobs.filter((j) => !j.dismissed).slice(0, 5),
     coderabbitReady: coderabbitReady(),
     claudeReady: claudeReady(),
+    plugin: pluginInfo(),
     installedAt: state.installedAt,
     sessions: [...sessions.values()].map((s) => ({ sessionId: s.sessionId, name: s.name, status: s.status, cwd: s.cwd })),
     cleaned: state.cleaned.slice(0, 30),

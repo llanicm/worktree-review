@@ -93,6 +93,98 @@ test('state lists the demo worktrees, sessions and PRs', async () => {
   assert.equal(st.cleaned.length, 1);
 });
 
+describe('plugin', () => {
+  const claudeDir = path.join(DEMO, 'home', '.claude');
+  const listed = path.join(claudeDir, 'demo-plugin-list.json');
+  const entry = (scope: string, enabled = true) => ({ id: 'worktree-review@worktree-review', version: '0.0.0', scope, enabled });
+  const plugin = async () => (await state()).plugin;
+  const hook = () => post('/api/hook', { session_id: 'plugin-test', cwd: repo });
+  /** Has the server ask `claude plugin list` again, and waits for its answer. */
+  const recheck = async (status: string) => {
+    await get('/api/integrations?refresh=1');
+    return until(async () => { const p = await plugin(); return p.status === status && p; }, `the plugin to show as ${status}`);
+  };
+
+  after(() => fs.rmSync(listed, { force: true }));
+
+  describe('before it is installed', () => {
+    test('shows as missing', async () => {
+      await until(async () => (await plugin()).status !== 'unknown', 'the first plugin check');
+      assert.equal((await plugin()).status, 'missing');
+    });
+
+    test('needs x-wtr to install', async () => {
+      assert.equal((await api('POST', '/api/plugin/install', {}, {})).status, 403);
+    });
+
+    test('Not now puts off the reminder', async () => {
+      await post('/api/plugin/dismiss');
+      assert.equal((await plugin()).dismissed, true);
+    });
+  });
+
+  describe('installing it', () => {
+    before(async () => {
+      await post('/api/plugin/install');
+      await until(async () => !(await plugin()).install?.running, 'the plugin install');
+    });
+
+    test('finishes without an error', async () => {
+      assert.equal((await plugin()).install.error, null);
+    });
+
+    test('shows as installed', async () => {
+      assert.equal((await plugin()).status, 'installed');
+    });
+
+    test('installs from the source the page showed', async () => {
+      assert.equal(fs.readFileSync(path.join(claudeDir, 'demo-plugin-installed'), 'utf8'), (await plugin()).source);
+    });
+
+    test('says to start a new session', async () => {
+      assert.ok((await plugin()).install.finishedAt);
+    });
+
+    test('stops saying so once a hook calls in', async () => {
+      await hook();
+      await until(async () => (await plugin()).install === null, 'the install note to clear');
+    });
+  });
+
+  describe('the check', () => {
+    test('counts a user install as installed', async () => {
+      fs.writeFileSync(listed, JSON.stringify([entry('user')]));
+      await recheck('installed');
+    });
+
+    test('counts an install synced by claude.ai as installed', async () => {
+      fs.writeFileSync(listed, JSON.stringify([entry('synced')]));
+      await recheck('installed');
+    });
+
+    test('counts a project-only install as missing', async () => {
+      fs.writeFileSync(listed, JSON.stringify([entry('project')]));
+      await recheck('missing');
+    });
+
+    test('says when it is installed for one project only', async () => {
+      fs.writeFileSync(listed, JSON.stringify([entry('local')]));
+      assert.equal((await recheck('missing')).projectOnly, true);
+    });
+
+    test('says a turned-off install is disabled, not missing', async () => {
+      fs.writeFileSync(listed, JSON.stringify([entry('user', false)]));
+      await recheck('disabled');
+    });
+
+    test('shows an uninstall as missing, even after a recent hook', async () => {
+      fs.writeFileSync(listed, '[]');
+      await hook();
+      await recheck('missing');
+    });
+  });
+});
+
 test('cleanup status explains each worktree', async () => {
   const by = Object.fromEntries((await state()).worktrees.map((w: Json) => [w.branch, w.cleanup]));
   assert.equal(by.main, null);
@@ -659,6 +751,52 @@ test('the page renders a worktree without errors', { skip: !fs.existsSync(proces
   }
 });
 
+describe('the review box', { skip: !fs.existsSync(process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome') && 'Chrome not found' }, () => {
+  let page: Awaited<ReturnType<typeof openPage>>;
+  let wtId: string;
+  const reviews = async () => (await get(`/api/worktrees/${wtId}/comments`)).reviews.length;
+  const type = (text: string) => page.eval(`(() => { const t = document.querySelector('textarea[data-ek=summary]'); t.value = ${JSON.stringify(text)}; t.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  const press = (keys: { metaKey?: boolean; ctrlKey?: boolean }) =>
+    page.eval(`document.querySelector('textarea[data-ek=summary]').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, ...${JSON.stringify(keys)} }))`);
+
+  before(async () => {
+    wtId = (await wtBy('feat/search-filters')).id;
+    page = await openPage(`${BASE}/#/${wtId}`);
+    await page.waitFor("document.querySelector('textarea[data-ek=summary]')");
+  });
+  after(() => page.close());
+
+  test('Enter alone does not send', async () => {
+    const before = await reviews();
+    await type('Plain Enter is a new line');
+    await press({});
+    await sleep(300);
+    assert.equal(await reviews(), before);
+  });
+
+  test('⌘Enter sends the review', async () => {
+    const before = await reviews();
+    await press({ metaKey: true });
+    await until(async () => (await reviews()) === before + 1, 'the review to be sent');
+  });
+
+  test('Ctrl+Enter sends it too', async () => {
+    const before = await reviews();
+    await page.waitFor("!document.querySelector('textarea[data-ek=summary]').value");
+    await type('Sent with Ctrl+Enter');
+    await press({ ctrlKey: true });
+    await until(async () => (await reviews()) === before + 1, 'the review to be sent');
+  });
+
+  test('does nothing when there is nothing to send', async () => {
+    const before = await reviews();
+    await page.waitFor("document.querySelector('[data-act=submit]').disabled");
+    await press({ metaKey: true });
+    await sleep(300);
+    assert.equal(await reviews(), before);
+  });
+});
+
 describe('commit order', { skip: !fs.existsSync(process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome') && 'Chrome not found' }, () => {
   let page: Awaited<ReturnType<typeof openPage>>;
   let wt: Json;
@@ -736,6 +874,49 @@ describe('commit order', { skip: !fs.existsSync(process.env.CHROME || '/Applicat
     after(async () => {
       await byCommit();
       await click('[data-act=order][data-newest=false]');
+    });
+  });
+});
+
+describe('installing as an app', () => {
+  describe('the manifest', () => {
+    let res: Response;
+    let manifest: Json;
+
+    before(async () => {
+      res = await fetch(`${BASE}/manifest.webmanifest`);
+      manifest = await res.json();
+    });
+
+    test('is served as a web app manifest', () => {
+      assert.equal(res.headers.get('content-type'), 'application/manifest+json');
+    });
+
+    test('opens in a window of its own', () => {
+      assert.equal(manifest.display, 'standalone');
+    });
+
+    test('serves every icon it lists', async () => {
+      for (const icon of manifest.icons) {
+        const r = await fetch(`${BASE}${icon.src}`);
+        assert.equal(r.status, 200, icon.src);
+        assert.equal(r.headers.get('content-type'), icon.type, icon.src);
+      }
+    });
+  });
+
+  describe('in Chrome', { skip: !fs.existsSync(process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome') && 'Chrome not found' }, () => {
+    let page: Awaited<ReturnType<typeof openPage>>;
+
+    before(async () => {
+      page = await openPage(`${BASE}/`);
+      await page.waitFor("document.readyState === 'complete' && !!document.querySelector('link[rel=manifest]')");
+    });
+    after(() => page.close());
+
+    test('can be installed', async () => {
+      const { result } = await page.send('Page.getInstallabilityErrors');
+      assert.deepEqual(result.installabilityErrors, []);
     });
   });
 });

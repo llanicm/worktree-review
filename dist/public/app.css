@@ -144,6 +144,8 @@ nav { overflow-y: auto; flex: 1; padding-bottom: 12px; }
 @keyframes pulse { 50% { opacity: .35; } }
 
 .side-foot { padding: 8px 16px; border-top: 1px solid var(--border-soft); font-size: 12px; }
+.plugin-note p { margin: 0 0 6px; }
+.plugin-note .actions { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
 .link-btn { background: none; border: 0; padding: 0; color: var(--accent); cursor: pointer; font-size: 12px; }
 .link-btn:hover { text-decoration: underline; }
 .toggle { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; text-transform: none; letter-spacing: 0; font-weight: 400; }

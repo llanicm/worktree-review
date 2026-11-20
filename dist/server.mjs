@@ -1,12 +1,12 @@
 // Generated from src/ by build.mjs. Edit the TypeScript source, not this file.
 
 // src/server/main.ts
-import fs16 from "node:fs";
+import fs17 from "node:fs";
 
 // src/server/http.ts
-import fs15 from "node:fs";
+import fs16 from "node:fs";
 import http from "node:http";
-import path12 from "node:path";
+import path13 from "node:path";
 
 // src/server/exec.ts
 import { execFile } from "node:child_process";
@@ -212,6 +212,7 @@ function loadState() {
     codeReviews: isRecord(o.codeReviews) ? o.codeReviews : fromCodeRabbit(o.coderabbit),
     prThreads: isRecord(o.prThreads) ? o.prThreads : {}
   };
+  if (isRecord(o.plugin)) state2.plugin = o.plugin;
   if (typeof o.onboardedAt === "number" || o.onboardedAt === null) state2.onboardedAt = o.onboardedAt;
   else if (state2.comments.length || state2.cleaned.length || Object.values(state2.worktrees).some((w) => w.reviewedAt)) state2.onboardedAt = Date.now();
   return state2;
@@ -748,6 +749,8 @@ var coderabbitReady = () => !!(integrations.data?.coderabbit.installed && integr
 var claudeReady = () => !!integrations.data?.claude.cliVersion;
 var claudePath = "claude";
 var claudeBin = () => claudePath;
+var SESSION_VARS = /^(CLAUDECODE|CLAUDE_PID|CLAUDE_EFFORT|CLAUDE_CODE_(ENTRYPOINT|SESSION_ID|SESSION_ATTENDED|CHILD_SESSION|MESSAGING_\w+))$/;
+var claudeEnv = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => !SESSION_VARS.test(k)));
 async function probeClaude() {
   const onPath = await probe("claude", ["--version"]);
   const exec = process.env.CLAUDE_CODE_EXECPATH;
@@ -925,9 +928,104 @@ function startJob(kind, title, items, worker) {
   return job;
 }
 
-// src/server/pr-threads.ts
+// src/server/plugin.ts
 import fs8 from "node:fs";
 import path5 from "node:path";
+var NAME = "worktree-review";
+var SEEN_FRESH = 7 * 864e5;
+var CHECK_EVERY = 864e5;
+var ROOT = path5.dirname(HERE);
+var USER_WIDE = ["user", "synced"];
+var source = "llanicm/worktree-review";
+var install = null;
+var plugin = () => state.plugin ??= {};
+function pluginSeen() {
+  const p = plugin();
+  const was = p.seenAt ?? 0;
+  p.seenAt = Date.now();
+  const firstSinceInstall = !!install?.finishedAt && was < install.finishedAt;
+  if (Date.now() - was > 36e5 || firstSinceInstall) {
+    save();
+    changed();
+  }
+}
+function pluginInfo() {
+  const p = state.plugin ?? {};
+  const seen = !!p.seenAt && Date.now() - p.seenAt < SEEN_FRESH;
+  const status = p.disabled ? "disabled" : p.installed === true ? "installed" : p.installed === false ? "missing" : seen ? "installed" : "unknown";
+  const done = !!install?.finishedAt && !install.error && (p.seenAt ?? 0) > install.finishedAt;
+  return { status, projectOnly: status === "missing" && !!p.projectOnly, source, dismissed: !!p.dismissedAt, install: done ? null : install };
+}
+async function findSource() {
+  try {
+    const url = (await run("git", ["-C", ROOT, "remote", "get-url", "origin"])).trim();
+    const m = url.match(/github\.com[:/]([^/]+)\/(.+?)(?:\.git)?$/);
+    if (m?.[1] && m[2]) {
+      source = `${m[1]}/${m[2]}`;
+      return;
+    }
+  } catch {
+  }
+  try {
+    const repo = asStr(rec(JSON.parse(fs8.readFileSync(path5.join(ROOT, ".claude-plugin", "plugin.json"), "utf8"))).repository);
+    const m = repo?.match(/github\.com\/([^/]+)\/([^/]+?)(?:\.git)?$/);
+    if (m?.[1] && m[2]) source = `${m[1]}/${m[2]}`;
+  } catch {
+  }
+}
+async function checkPlugin(force = false) {
+  await findSource();
+  const p = plugin();
+  if (!force && p.checkedAt && Date.now() - p.checkedAt < CHECK_EVERY) return;
+  let out;
+  try {
+    out = await run(claudeBin(), ["plugin", "list", "--json"], { env: claudeEnv(), timeout: 3e4 });
+  } catch {
+    return;
+  }
+  let list;
+  try {
+    list = JSON.parse(out);
+  } catch {
+    list = lastJson(out);
+  }
+  if (!Array.isArray(list)) return;
+  const mine = list.filter((e) => isRecord(e) && asStr(e.id)?.startsWith(`${NAME}@`)).map(rec);
+  const userWide = mine.filter((e) => USER_WIDE.includes(asStr(e.scope) ?? ""));
+  p.installed = userWide.some((e) => e.enabled !== false);
+  p.disabled = !p.installed && userWide.length > 0;
+  p.projectOnly = !userWide.length && mine.length > 0;
+  p.checkedAt = Date.now();
+  save();
+  changed();
+}
+function installPlugin() {
+  if (install?.running) return install;
+  const started = { running: true, error: null, finishedAt: null };
+  install = started;
+  changed();
+  log(`installing the plugin from ${source}`);
+  run(claudeBin(), ["plugin", "install", NAME, "--marketplace", source, "--scope", "user", "--json"], { env: claudeEnv(), timeout: 18e4 }).then(async () => {
+    install = { running: false, error: null, finishedAt: Date.now() };
+    await checkPlugin(true);
+  }, (e) => {
+    const { stdout, stderr, message } = errInfo(e);
+    const result = rec(lastJson(stdout || ""));
+    const msg = asStr(result.error) || asStr(result.message) || (stderr || "").trim().split("\n").pop() || message;
+    install = { running: false, error: msg || "The install did not finish.", finishedAt: Date.now() };
+    log("plugin install failed", msg);
+  }).finally(changed);
+  return started;
+}
+function dismissPlugin() {
+  plugin().dismissedAt = Date.now();
+  save();
+  changed();
+}
+
+// src/server/pr-threads.ts
+import fs9 from "node:fs";
+import path6 from "node:path";
 var CHECK_MS = 6e4;
 var BURST_MS = 2e4;
 var BURST_FOR = 10 * 6e4;
@@ -1253,7 +1351,7 @@ ${rest.map((c2) => `> ${who(c2.author)}: ${c2.body.replace(/\n/g, "\n> ")}`).joi
     fromThread: t.id
   };
   try {
-    c.lineText = fs8.readFileSync(path5.join(wt.path, t.file), "utf8").split("\n")[line - 1] ?? "";
+    c.lineText = fs9.readFileSync(path6.join(wt.path, t.file), "utf8").split("\n")[line - 1] ?? "";
   } catch {
   }
   state.comments.push(c);
@@ -1264,21 +1362,21 @@ ${rest.map((c2) => `> ${who(c2.author)}: ${c2.body.replace(/\n/g, "\n> ")}`).joi
 
 // src/server/removal.ts
 import { spawn as spawn3 } from "node:child_process";
-import fs10 from "node:fs";
-import path7 from "node:path";
+import fs11 from "node:fs";
+import path8 from "node:path";
 
 // src/server/sessions.ts
-import fs9 from "node:fs";
-import path6 from "node:path";
+import fs10 from "node:fs";
+import path7 from "node:path";
 var transcriptCache = /* @__PURE__ */ new Map();
 function findTranscript(sessionId) {
   const cached = transcriptCache.get(sessionId);
   if (cached) return cached;
-  const projects = path6.join(CLAUDE_DIR, "projects");
+  const projects = path7.join(CLAUDE_DIR, "projects");
   try {
-    for (const d of fs9.readdirSync(projects)) {
-      const p = path6.join(projects, d, `${sessionId}.jsonl`);
-      if (fs9.existsSync(p)) {
+    for (const d of fs10.readdirSync(projects)) {
+      const p = path7.join(projects, d, `${sessionId}.jsonl`);
+      if (fs10.existsSync(p)) {
         transcriptCache.set(sessionId, p);
         return p;
       }
@@ -1288,15 +1386,15 @@ function findTranscript(sessionId) {
   return null;
 }
 function readTail(p, bytes) {
-  const fd = fs9.openSync(p, "r");
+  const fd = fs10.openSync(p, "r");
   try {
-    const size = fs9.fstatSync(fd).size;
+    const size = fs10.fstatSync(fd).size;
     const len = Math.min(size, bytes);
     const buf = Buffer.alloc(len);
-    fs9.readSync(fd, buf, 0, len, size - len);
+    fs10.readSync(fd, buf, 0, len, size - len);
     return buf.toString("utf8");
   } finally {
-    fs9.closeSync(fd);
+    fs10.closeSync(fd);
   }
 }
 var EDIT_TOOLS = /* @__PURE__ */ new Set(["Edit", "MultiEdit", "Write", "NotebookEdit"]);
@@ -1371,22 +1469,22 @@ var discoverSoon = () => {
   });
 };
 function refreshAgents(s, transcript, paths, ownPath) {
-  const dir = path6.join(path6.dirname(transcript), s.sessionId, "subagents");
+  const dir = path7.join(path7.dirname(transcript), s.sessionId, "subagents");
   let files = [];
   try {
-    files = fs9.readdirSync(dir).filter((f) => f.endsWith(".meta.json"));
+    files = fs10.readdirSync(dir).filter((f) => f.endsWith(".meta.json"));
   } catch {
     return [];
   }
   const result = [];
   for (const f of files) {
-    const meta = parseAgentMeta(loadJson(path6.join(dir, f), null));
+    const meta = parseAgentMeta(loadJson(path7.join(dir, f), null));
     if (!meta || meta.finished) continue;
     const agentId = f.slice(0, -".meta.json".length).replace(/^agent-/, "");
-    const tp = path6.join(dir, f.slice(0, -".meta.json".length) + ".jsonl");
+    const tp = path7.join(dir, f.slice(0, -".meta.json".length) + ".jsonl");
     let size, mtime;
     try {
-      ({ size, mtimeMs: mtime } = fs9.statSync(tp));
+      ({ size, mtimeMs: mtime } = fs10.statSync(tp));
     } catch {
       continue;
     }
@@ -1410,16 +1508,16 @@ function refreshAgents(s, transcript, paths, ownPath) {
   return result;
 }
 function refreshSessions() {
-  const dir = path6.join(CLAUDE_DIR, "sessions");
+  const dir = path7.join(CLAUDE_DIR, "sessions");
   const live = /* @__PURE__ */ new Set();
   let files = [];
   try {
-    files = fs9.readdirSync(dir).filter((f) => f.endsWith(".json"));
+    files = fs10.readdirSync(dir).filter((f) => f.endsWith(".json"));
   } catch {
   }
   const paths = [...wts.values()].map((w) => w.path);
   for (const f of files) {
-    const info = parseSessionInfo(loadJson(path6.join(dir, f), null));
+    const info = parseSessionInfo(loadJson(path7.join(dir, f), null));
     if (!info || !pidAlive(info.pid) || reviewerPids.has(info.pid)) continue;
     live.add(info.sessionId);
     let s = sessions.get(info.sessionId);
@@ -1432,7 +1530,7 @@ function refreshSessions() {
     const tp = findTranscript(s.sessionId);
     if (tp) {
       try {
-        const size = fs9.statSync(tp).size;
+        const size = fs10.statSync(tp).size;
         if (size !== s.scannedSize && Date.now() - s.scannedAt > 8e3) {
           s.scannedSize = size;
           s.scannedAt = Date.now();
@@ -1513,7 +1611,7 @@ async function removeWorktree(wt, how, { force = false } = {}) {
   changed();
 }
 async function detachWorktree(wt, repo, { force }) {
-  if (fs10.existsSync(path7.join(wt.path, ".gitmodules"))) {
+  if (fs11.existsSync(path8.join(wt.path, ".gitmodules"))) {
     try {
       await run("git", ["worktree", "remove", ...force ? ["--force"] : [], wt.path], { cwd: repo.root });
     } catch (e) {
@@ -1525,9 +1623,9 @@ async function detachWorktree(wt, repo, { force }) {
     const entries = parseStatus(await git(wt.path, ["status", "--porcelain=v1", "-z"]));
     if (entries.length) throw httpError(409, `Git found ${entries.length} modified or untracked file${entries.length === 1 ? "" : "s"} in it just now, so it wasn't removed.`);
   }
-  const aside = path7.join(path7.dirname(wt.path), `.${path7.basename(wt.path)}.removing-${Date.now()}`);
+  const aside = path8.join(path8.dirname(wt.path), `.${path8.basename(wt.path)}.removing-${Date.now()}`);
   try {
-    fs10.renameSync(wt.path, aside);
+    fs11.renameSync(wt.path, aside);
   } catch (e) {
     const { code, message } = errInfo(e);
     if (code !== "EXDEV") throw httpError(409, `Couldn't move it aside to delete it: ${message}`);
@@ -1545,7 +1643,7 @@ function deleteInBackground(p) {
     save();
   };
   if (process.platform === "win32") {
-    fs10.promises.rm(p, { recursive: true, force: true, maxRetries: 3 }).then(done, (e) => log("background delete failed", p, errInfo(e).message));
+    fs11.promises.rm(p, { recursive: true, force: true, maxRetries: 3 }).then(done, (e) => log("background delete failed", p, errInfo(e).message));
     return;
   }
   const child = spawn3("rm", ["-rf", p], { detached: true, stdio: "ignore" });
@@ -1717,6 +1815,7 @@ function publicState() {
     jobs: jobs.filter((j) => !j.dismissed).slice(0, 5),
     coderabbitReady: coderabbitReady(),
     claudeReady: claudeReady(),
+    plugin: pluginInfo(),
     installedAt: state.installedAt,
     sessions: [...sessions.values()].map((s) => ({ sessionId: s.sessionId, name: s.name, status: s.status, cwd: s.cwd })),
     cleaned: state.cleaned.slice(0, 30),
@@ -1742,15 +1841,15 @@ data: ${json}
 }
 
 // src/server/routes.ts
-import fs14 from "node:fs";
+import fs15 from "node:fs";
 
 // src/server/claude-review.ts
-import path9 from "node:path";
+import path10 from "node:path";
 
 // src/server/code-review.ts
 import { spawn as spawn4 } from "node:child_process";
-import fs11 from "node:fs";
-import path8 from "node:path";
+import fs12 from "node:fs";
+import path9 from "node:path";
 var REVIEWER_NAMES = { coderabbit: "CodeRabbit", claude: "Claude" };
 var isReviewer = (v) => v === "coderabbit" || v === "claude";
 var children = /* @__PURE__ */ new Map();
@@ -1797,7 +1896,7 @@ function startInBackground(wt, review, setUp, run2) {
 }
 function addSnippet(wt, f) {
   try {
-    const lines = fs11.readFileSync(path8.join(wt.path, f.file), "utf8").split("\n");
+    const lines = fs12.readFileSync(path9.join(wt.path, f.file), "utf8").split("\n");
     if (f.startLine) f.snippet = lines.slice(f.startLine - 1, Math.min(f.endLine || f.startLine, f.startLine + 4)).join("\n");
   } catch {
   }
@@ -1903,7 +2002,7 @@ ${f.codegen}`);
     fromFinding: f.id
   };
   try {
-    const text = fs11.readFileSync(path8.join(wt.path, f.file), "utf8").split("\n");
+    const text = fs12.readFileSync(path9.join(wt.path, f.file), "utf8").split("\n");
     c.lineText = text[(c.line || 1) - 1] ?? "";
   } catch {
   }
@@ -1938,12 +2037,10 @@ var SCHEMA = {
   required: ["findings"]
 };
 var prompt = (base) => `Run the code-review skill (Skill tool, args: "${base}") on this worktree: its changes against ${base}, including uncommitted and untracked files. Don't change any files. Then return every finding it reports as structured output, with file paths relative to the repository root and line numbers in the current version of each file.`;
-var SESSION_VARS = /^(CLAUDECODE|CLAUDE_PID|CLAUDE_EFFORT|CLAUDE_CODE_(ENTRYPOINT|SESSION_ID|SESSION_ATTENDED|CHILD_SESSION|MESSAGING_\w+))$/;
-var reviewerEnv = () => Object.fromEntries(Object.entries(process.env).filter(([k]) => !SESSION_VARS.test(k)));
 function activity(wt, name, input) {
   const file = asStr(input.file_path);
   if (name === "Skill") return "Starting the review";
-  if (name === "Read" && file) return `Reading ${path9.relative(wt.path, path9.resolve(wt.path, file))}`;
+  if (name === "Read" && file) return `Reading ${path10.relative(wt.path, path10.resolve(wt.path, file))}`;
   if (name === "Bash") return asStr(input.description) || "Running a command";
   if (name === "Grep" || name === "Glob") return "Searching the code";
   if (name === "Task" || name === "Agent") return asStr(input.description) || "Starting a sub-agent";
@@ -1959,7 +2056,7 @@ function toFinding(wt, v) {
     id: newId("f"),
     source: "claude",
     severity: SEVERITIES2.includes(severity) ? severity : "info",
-    file: path9.isAbsolute(raw) ? path9.relative(wt.path, raw) : raw,
+    file: path10.isAbsolute(raw) ? path10.relative(wt.path, raw) : raw,
     startLine: start,
     endLine: Number(o.endLine) || start,
     title: asStr(o.title) || "",
@@ -1998,7 +2095,7 @@ function runClaude(wt, review, effort, base) {
     "--json-schema",
     JSON.stringify(SCHEMA)
   ], {
-    env: reviewerEnv(),
+    env: claudeEnv(),
     onEvent: (ev) => {
       if (ev.type === "assistant") {
         const content = rec(ev.message).content;
@@ -2101,16 +2198,16 @@ function runCodeRabbit(wt, review) {
 }
 
 // src/server/diffs.ts
-import fs12 from "node:fs";
-import path10 from "node:path";
+import fs13 from "node:fs";
+import path11 from "node:path";
 async function snapshotTree(wt) {
   if (wt.snap && wt.snap.fp === wt.fingerprint) return wt.snap.tree;
   const fp = wt.fingerprint;
-  const index = path10.resolve(wt.path, (await git(wt.path, ["rev-parse", "--git-path", "index"])).trim());
-  const tmp = path10.join(TMP_DIR, `${wt.id}-${Date.now()}.index`);
+  const index = path11.resolve(wt.path, (await git(wt.path, ["rev-parse", "--git-path", "index"])).trim());
+  const tmp = path11.join(TMP_DIR, `${wt.id}-${Date.now()}.index`);
   try {
     try {
-      fs12.copyFileSync(index, tmp);
+      fs13.copyFileSync(index, tmp);
     } catch {
     }
     const env = { GIT_INDEX_FILE: tmp };
@@ -2119,8 +2216,8 @@ async function snapshotTree(wt) {
     wt.snap = { fp, tree };
     return tree;
   } finally {
-    fs12.rmSync(tmp, { force: true });
-    fs12.rmSync(tmp + ".lock", { force: true });
+    fs13.rmSync(tmp, { force: true });
+    fs13.rmSync(tmp + ".lock", { force: true });
   }
 }
 function memo(wt, key, fn) {
@@ -2166,9 +2263,9 @@ async function blameWorktree(wt, mergeBase, files, commits) {
   const byShaN = new Map(commits.map((c) => [c.sha, c.n]));
   const result = {};
   await Promise.all(files.slice(0, 200).map(async (file) => {
-    const abs = path10.join(wt.path, file);
+    const abs = path11.join(wt.path, file);
     try {
-      if (fs12.statSync(abs).size > 2 * 1024 * 1024) return;
+      if (fs13.statSync(abs).size > 2 * 1024 * 1024) return;
     } catch {
       return;
     }
@@ -2289,11 +2386,11 @@ async function getDiff(wt, mode) {
 var UNCOMMITTED = "0".repeat(40);
 async function getFileBlame(wt, file) {
   await refreshWorktree(wt);
-  const abs = path10.resolve(wt.path, file);
-  if (!file || !abs.startsWith(wt.path + path10.sep)) throw httpError(400, "Not a file in this worktree");
+  const abs = path11.resolve(wt.path, file);
+  if (!file || !abs.startsWith(wt.path + path11.sep)) throw httpError(400, "Not a file in this worktree");
   let size;
   try {
-    size = fs12.statSync(abs).size;
+    size = fs13.statSync(abs).size;
   } catch {
     throw httpError(404, `${file} isn't in the worktree`);
   }
@@ -2311,8 +2408,8 @@ async function getFileBlame(wt, file) {
     } catch {
     }
     if (out === null) {
-      const lines = fs12.readFileSync(abs, "utf8").split("\n").length;
-      info[UNCOMMITTED] = { sha: UNCOMMITTED, author: "You", time: fs12.statSync(abs).mtimeMs, summary: "Not committed yet", n: 0 };
+      const lines = fs13.readFileSync(abs, "utf8").split("\n").length;
+      info[UNCOMMITTED] = { sha: UNCOMMITTED, author: "You", time: fs13.statSync(abs).mtimeMs, summary: "Not committed yet", n: 0 };
       runs.push([1, Math.max(1, lines - 1), UNCOMMITTED]);
       return { file, fingerprint: fp, commits: info, runs };
     }
@@ -2422,8 +2519,8 @@ function claimReviews({ session_id, cwd }) {
 }
 
 // src/server/settings.ts
-import fs13 from "node:fs";
-import path11 from "node:path";
+import fs14 from "node:fs";
+import path12 from "node:path";
 var isIntIn = (v, min, max) => Number.isInteger(v) && v >= min && v <= max;
 async function updateConfig(body) {
   const patch = isRecord(body) ? body : {};
@@ -2434,7 +2531,7 @@ async function updateConfig(body) {
         errors.push(`Invalid value for ${k}`);
         continue;
       }
-      const missing = v.filter((p) => !fs13.existsSync(expand(p.trim())));
+      const missing = v.filter((p) => !fs14.existsSync(expand(p.trim())));
       if (missing.length) {
         errors.push(`Folder not found: ${missing.join(", ")}`);
         continue;
@@ -2473,29 +2570,29 @@ async function updateConfig(body) {
     }
   }
   if (errors.length) throw httpError(400, errors.join("; "));
-  fs13.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n");
+  fs14.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + "\n");
   if ("roots" in patch || "extraRepos" in patch) await discoverWorktrees();
   changed();
 }
 var SKIP_DIRS = /* @__PURE__ */ new Set(["node_modules", ".git", ".Trash", "Library", ".cache", ".npm", ".pnpm-store"]);
 function listDir(p, showHidden) {
-  const full = path11.resolve(expand(p || "~"));
-  if (full !== HOME && !full.startsWith(HOME + path11.sep)) throw httpError(403, "Only folders inside your home directory can be browsed.");
+  const full = path12.resolve(expand(p || "~"));
+  if (full !== HOME && !full.startsWith(HOME + path12.sep)) throw httpError(403, "Only folders inside your home directory can be browsed.");
   let dirents;
   try {
-    dirents = fs13.readdirSync(full, { withFileTypes: true });
+    dirents = fs14.readdirSync(full, { withFileTypes: true });
   } catch {
     throw httpError(404, `Can't open ${full}`);
   }
-  const isRepo = (d) => fs13.existsSync(path11.join(d, ".git"));
+  const isRepo = (d) => fs14.existsSync(path12.join(d, ".git"));
   const entries = [];
   for (const e of dirents) {
     if (SKIP_DIRS.has(e.name) || !showHidden && e.name.startsWith(".")) continue;
-    const child = path11.join(full, e.name);
+    const child = path12.join(full, e.name);
     let dir = e.isDirectory();
     if (!dir && e.isSymbolicLink()) {
       try {
-        dir = fs13.statSync(child).isDirectory();
+        dir = fs14.statSync(child).isDirectory();
       } catch {
       }
     }
@@ -2506,8 +2603,8 @@ function listDir(p, showHidden) {
   entries.sort((a, b) => a.name.localeCompare(b.name, void 0, { sensitivity: "base" }));
   return {
     path: full,
-    display: full === HOME ? "~" : full.startsWith(HOME + path11.sep) ? "~" + full.slice(HOME.length) : full,
-    parent: full === HOME ? null : path11.dirname(full),
+    display: full === HOME ? "~" : full.startsWith(HOME + path12.sep) ? "~" + full.slice(HOME.length) : full,
+    parent: full === HOME ? null : path12.dirname(full),
     isRepo: isRepo(full),
     repoChildren: entries.filter((e) => e.isRepo).length,
     entries
@@ -2703,7 +2800,16 @@ var routes = [
   ["POST", /^\/api\/pr-threads\/([\w-]+)\/reply$/, (m, raw) => replyToThread(arg(m), String(bodyOf(raw).body ?? ""))],
   ["POST", /^\/api\/pr-threads\/([\w-]+)\/(resolve|unresolve)$/, (m) => setResolved(arg(m), m[2] === "resolve")],
   ["GET", /^\/api\/fs$/, (_m, _body, url) => listDir(url.searchParams.get("path"), url.searchParams.get("hidden") === "1")],
-  ["GET", /^\/api\/integrations$/, (_m, _body, url) => getIntegrations(url.searchParams.has("refresh"))],
+  ["GET", /^\/api\/integrations$/, (_m, _body, url) => {
+    const refresh = url.searchParams.has("refresh");
+    if (refresh) void checkPlugin(true);
+    return getIntegrations(refresh);
+  }],
+  ["POST", /^\/api\/plugin\/install$/, () => installPlugin()],
+  ["POST", /^\/api\/plugin\/dismiss$/, () => {
+    dismissPlugin();
+    return { ok: true };
+  }],
   ["POST", /^\/api\/integrations\/coderabbit\/login$/, () => startCodeRabbitLogin()],
   ["POST", /^\/api\/integrations\/coderabbit\/logout$/, async () => {
     await probe("coderabbit", ["auth", "logout", "--agent"]);
@@ -2794,7 +2900,7 @@ var routes = [
   }],
   ["POST", /^\/api\/shutdown$/, (_m, raw) => {
     const body = bodyOf(raw);
-    const replacement = typeof body.restartWith === "string" && body.restartWith.endsWith("server.mjs") && fs14.existsSync(body.restartWith) ? body.restartWith : null;
+    const replacement = typeof body.restartWith === "string" && body.restartWith.endsWith("server.mjs") && fs15.existsSync(body.restartWith) ? body.restartWith : null;
     if (jobsRunning()) {
       deferShutdown(replacement);
       log(`shutdown requested; waiting for running jobs to finish${replacement ? `, then starting ${replacement}` : ""}`);
@@ -2805,6 +2911,7 @@ var routes = [
   }],
   ["POST", /^\/api\/hook$/, (_m, raw) => {
     markHook();
+    pluginSeen();
     refreshSessions();
     return { text: claimReviews(bodyOf(raw)) };
   }]
@@ -2849,7 +2956,7 @@ function sendRaw(res, status, body, type) {
   res.writeHead(status, { "content-type": type, "cache-control": "no-store" });
   res.end(body);
 }
-var MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml" };
+var MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".webmanifest": "application/manifest+json" };
 var server = http.createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://127.0.0.1:${PORT}`);
   const host = (req.headers.host || "").replace(/:\d+$/, "");
@@ -2892,11 +2999,11 @@ data: ${JSON.stringify(publicState())}
     return;
   }
   const file = url.pathname === "/" ? "index.html" : url.pathname.slice(1);
-  const full = path12.join(HERE, "public", path12.normalize(file));
-  if (!full.startsWith(path12.join(HERE, "public"))) return sendRaw(res, 403, "Forbidden", "text/plain");
-  fs15.readFile(full, (err, data) => {
+  const full = path13.join(HERE, "public", path13.normalize(file));
+  if (!full.startsWith(path13.join(HERE, "public"))) return sendRaw(res, 403, "Forbidden", "text/plain");
+  fs16.readFile(full, (err, data) => {
     if (err) return sendRaw(res, 404, "Not found", "text/plain");
-    sendRaw(res, 200, data, MIME[path12.extname(full)] || "application/octet-stream");
+    sendRaw(res, 200, data, MIME[path13.extname(full)] || "application/octet-stream");
   });
 });
 
@@ -2920,11 +3027,14 @@ server.on("error", (e) => {
 });
 server.listen(PORT, "127.0.0.1", async () => {
   log(`Worktree Review ${VERSION} on http://127.0.0.1:${PORT}  (data: ${DATA_DIR})`);
-  state.trash = state.trash.filter((p) => fs16.existsSync(p));
+  state.trash = state.trash.filter((p) => fs17.existsSync(p));
   for (const p of state.trash) deleteInBackground(p);
   await discoverWorktrees();
   refreshSessions();
-  getIntegrations().then(changed, () => {
+  getIntegrations().then(() => {
+    changed();
+    return checkPlugin();
+  }).catch(() => {
   });
   void loop(discoverWorktrees, 3e4);
   void loop(async () => {

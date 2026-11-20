@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import type {
   BaseChoices, BlameResponse, FileBlame, CodeRabbitLogin, CodeReview, CodeReviewsResponse, Comment, CommentsResponse, DiffResponse, DirListing,
-  Finding, HookResponse, Integrations, Job, NewComment, Ok, PRThread, PRThreads, PromptResponse, PublicState, RepairResult, Review, Reviewer,
+  Finding, HookResponse, Integrations, Job, PluginInstall, NewComment, Ok, PRThread, PRThreads, PromptResponse, PublicState, RepairResult, Review, Reviewer,
   SendAllResponse, ShutdownResponse, StartCodeReview,
 } from '../shared/api.ts';
 import { cleanupStatus } from './cleanup-status.ts';
@@ -13,6 +13,7 @@ import { gitOk, httpError } from './exec.ts';
 import { getIntegrations, markHook, probe, startCodeRabbitLogin } from './integrations.ts';
 import { deferShutdown, jobs, jobsRunning, shutdownNow, startJob } from './jobs.ts';
 import { HOME } from './paths.ts';
+import { checkPlugin, dismissPlugin, installPlugin, pluginSeen } from './plugin.ts';
 import { getPRThreads, getThread, replyToThread, setResolved, syncWorktree, threadToComment } from './pr-threads.ts';
 import { publicState } from './public-state.ts';
 import { removeWorktree, repairWorktrees } from './removal.ts';
@@ -28,7 +29,7 @@ import { baseChoices, getWt, refreshWorktree } from './worktrees.ts';
 type ApiResult =
   | PublicState | BaseChoices | DiffResponse | BlameResponse | FileBlame | CommentsResponse | PromptResponse | Ok | Job | RepairResult | CodeReviewsResponse
   | CodeReview | Finding | SendAllResponse | DirListing | Integrations | CodeRabbitLogin | Comment | Review | ShutdownResponse | HookResponse
-  | PRThreads | PRThread;
+  | PRThreads | PRThread | PluginInstall;
 
 type Handler = (m: RegExpMatchArray, body: unknown, url: URL) => ApiResult | Promise<ApiResult>;
 export type Route = readonly [method: string, re: RegExp, handler: Handler];
@@ -179,7 +180,13 @@ export const routes: Route[] = [
   ['POST', /^\/api\/pr-threads\/([\w-]+)\/reply$/, (m, raw) => replyToThread(arg(m), String(bodyOf<{ body?: unknown }>(raw).body ?? ''))],
   ['POST', /^\/api\/pr-threads\/([\w-]+)\/(resolve|unresolve)$/, (m) => setResolved(arg(m), m[2] === 'resolve')],
   ['GET', /^\/api\/fs$/, (_m, _body, url) => listDir(url.searchParams.get('path'), url.searchParams.get('hidden') === '1')],
-  ['GET', /^\/api\/integrations$/, (_m, _body, url) => getIntegrations(url.searchParams.has('refresh'))],
+  ['GET', /^\/api\/integrations$/, (_m, _body, url) => {
+    const refresh = url.searchParams.has('refresh');
+    if (refresh) void checkPlugin(true);
+    return getIntegrations(refresh);
+  }],
+  ['POST', /^\/api\/plugin\/install$/, () => installPlugin()],
+  ['POST', /^\/api\/plugin\/dismiss$/, (): Ok => { dismissPlugin(); return { ok: true }; }],
   ['POST', /^\/api\/integrations\/coderabbit\/login$/, () => startCodeRabbitLogin()],
   ['POST', /^\/api\/integrations\/coderabbit\/logout$/, async () => {
     await probe('coderabbit', ['auth', 'logout', '--agent']);
@@ -274,6 +281,7 @@ export const routes: Route[] = [
   }],
   ['POST', /^\/api\/hook$/, (_m, raw): HookResponse => {
     markHook();
+    pluginSeen();
     refreshSessions();
     return { text: claimReviews(bodyOf<{ session_id?: string; cwd?: string }>(raw)) };
   }],

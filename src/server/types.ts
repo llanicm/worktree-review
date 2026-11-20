@@ -115,6 +115,8 @@ export interface State {
   codeReviews: Record<string, Partial<Record<Reviewer, CodeReview>>>;
   /** wtId -> the review threads on its PR, as last fetched. */
   prThreads: Record<string, PRThreadsRecord>;
+  /** What's known about the Claude Code plugin: when a hook last called in, the last CLI check, and "Not now". */
+  plugin?: { seenAt?: number; checkedAt?: number; installed?: boolean; disabled?: boolean; projectOnly?: boolean; dismissedAt?: number };
 }
 
 /** A PR's review threads as last fetched from GitHub. */
