@@ -77,7 +77,12 @@ document.addEventListener('keydown', (e) => {
     return;
   }
   const ek = el.dataset.ek;
-  if (!ek || ek === 'summary') return;
+  if (!ek) return;
+  if (ek === 'summary') {
+    // ⌘/Ctrl+Enter in the review box sends the review, as Send to Claude does (when it's enabled).
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); $<HTMLButtonElement>('[data-act="submit"]:not(:disabled)')?.click(); }
+    return;
+  }
   if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); saveEditor(ek).catch((err) => toast(errMsg(err), true)); }
   if (e.key === 'Escape') { S.editors.delete(ek); renderMain(); }
 });
