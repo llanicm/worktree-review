@@ -2956,7 +2956,7 @@ function sendRaw(res, status, body, type) {
   res.writeHead(status, { "content-type": type, "cache-control": "no-store" });
   res.end(body);
 }
-var MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml" };
+var MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript; charset=utf-8", ".css": "text/css; charset=utf-8", ".svg": "image/svg+xml", ".png": "image/png", ".webmanifest": "application/manifest+json" };
 var server = http.createServer(async (req, res) => {
   const url = new URL(req.url ?? "/", `http://127.0.0.1:${PORT}`);
   const host = (req.headers.host || "").replace(/:\d+$/, "");
