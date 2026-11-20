@@ -1,5 +1,17 @@
 # Changelog
 
+## [2.6.0](https://github.com/llanicm/worktree-review/compare/v2.5.2...v2.6.0) (2026-11-20)
+
+
+### Features
+
+* add WebStorm as an editor for open links ([#36](https://github.com/llanicm/worktree-review/issues/36)) ([9710307](https://github.com/llanicm/worktree-review/commit/9710307065799d6b6138b5001e890bce63e26b0d))
+* hide repos you don't review here ([#38](https://github.com/llanicm/worktree-review/issues/38)) ([d9b4c2c](https://github.com/llanicm/worktree-review/commit/d9b4c2ced0fa269a73e859a6824e90889777d923))
+* make the dashboard installable as an app ([#42](https://github.com/llanicm/worktree-review/issues/42)) ([54546d2](https://github.com/llanicm/worktree-review/commit/54546d20d85cba0979d439d561f331ec31e7a316))
+* offer to install the Claude Code plugin when the dashboard runs without it ([#37](https://github.com/llanicm/worktree-review/issues/37)) ([1a4fb9c](https://github.com/llanicm/worktree-review/commit/1a4fb9c46fcd286889b517cc0a2f4cf1d21a74c8))
+* send the review with Cmd/Ctrl+Enter ([#40](https://github.com/llanicm/worktree-review/issues/40)) ([2cfe131](https://github.com/llanicm/worktree-review/commit/2cfe131cce35acf6ada3a3fa7be4de28b843d7f0))
+* show newest commits first, as an option ([#41](https://github.com/llanicm/worktree-review/issues/41)) ([fbd928a](https://github.com/llanicm/worktree-review/commit/fbd928a99ec9f2beb1842d55ab7da7c296b095b0))
+
 ## [2.5.2](https://github.com/llanicm/worktree-review/compare/v2.5.1...v2.5.2) (2026-11-18)
 
 
