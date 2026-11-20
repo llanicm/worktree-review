@@ -1628,12 +1628,12 @@ function reviewBarHtml(wt) {
   return `<details class="review-bar" ${open ? "open" : ""}>
     <summary data-act="toggle-review-bar" data-id="${wt.id}" title="${open ? "Minimise" : "Expand"}"><span><span class="caret">${open ? "▾" : "▸"}</span> Review</span><span class="progress">${drafts.length} draft comment${drafts.length === 1 ? "" : "s"}${pending.length ? ` · ${pending.length} waiting` : ""}</span></summary>
     <div class="body">
-      <textarea data-ek="summary" placeholder="Overall feedback (optional)">${esc(summary)}</textarea>
+      <textarea data-ek="summary" placeholder="Overall feedback (optional) · ⌘↵ to send">${esc(summary)}</textarea>
       <div class="actions">
         <select data-act="target" title="Which Claude session gets this review">${options.join("")}</select>
         <span style="flex:1"></span>
         <button class="btn" data-act="copy-prompt" ${drafts.length || pending.length ? "" : "disabled"}>Copy as prompt</button>
-        <button class="btn primary" data-act="submit" ${drafts.length || summary.trim() ? "" : "disabled"}>Send to Claude</button>
+        <button class="btn primary" data-act="submit" title="Send to Claude (⌘↵ or Ctrl+Enter)" ${drafts.length || summary.trim() ? "" : "disabled"}>Send to Claude</button>
       </div>
       <div class="note">${linked.length ? "Delivered when that session finishes what it's doing, or with your next message to it." : "No Claude session is working in this worktree right now. It'll go to the first one that does, or copy it as a prompt."}</div>
       ${pending.length ? `<div class="pending-list">${pending.map((r) => `<div>Review with ${r.commentIds.length} comment${r.commentIds.length === 1 ? "" : "s"} waiting since ${ago(r.createdAt)} · <button class="link-btn" data-act="cancel-review" data-id="${r.id}">take back</button></div>`).join("")}</div>` : ""}
@@ -2648,7 +2648,14 @@ document.addEventListener("keydown", (e) => {
     return;
   }
   const ek = el.dataset.ek;
-  if (!ek || ek === "summary") return;
+  if (!ek) return;
+  if (ek === "summary") {
+    if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      $('[data-act="submit"]:not(:disabled)')?.click();
+    }
+    return;
+  }
   if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
     e.preventDefault();
     saveEditor(ek).catch((err) => toast(errMsg(err), true));
