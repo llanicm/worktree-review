@@ -6,6 +6,8 @@ import { httpError } from './exec.ts';
 import { CONFIG_PATH, expand, HOME } from './paths.ts';
 import { changed } from './state.ts';
 import { isRecord, isStringArray } from './util.ts';
+import { refreshPRs } from './prs.ts';
+import { refreshSessions } from './sessions.ts';
 import { discoverWorktrees } from './worktrees.ts';
 
 const isIntIn = (v: unknown, min: number, max: number): v is number => Number.isInteger(v) && (v as number) >= min && (v as number) <= max;
@@ -19,6 +21,10 @@ export async function updateConfig(body: unknown): Promise<void> {
       const missing = v.filter((p) => !fs.existsSync(expand(p.trim())));
       if (missing.length) { errors.push(`Folder not found: ${missing.join(', ')}`); continue; }
       config[k] = [...new Set(v.map((p) => p.trim()).filter(Boolean))];
+    } else if (k === 'ignoreRepos') {
+      // No check that the folder exists: a repo can stay ignored after it moves or is deleted.
+      if (!isStringArray(v)) { errors.push(`Invalid value for ${k}`); continue; }
+      config.ignoreRepos = [...new Set(v.map((p) => p.trim()).filter(Boolean))];
     } else if (k === 'autoCleanup' || k === 'coderabbitDeep') {
       if (typeof v !== 'boolean') { errors.push(`Invalid value for ${k}`); continue; }
       config[k] = v;
@@ -38,7 +44,12 @@ export async function updateConfig(body: unknown): Promise<void> {
   }
   if (errors.length) throw httpError(400, errors.join('; '));
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2) + '\n');
-  if ('roots' in patch || 'extraRepos' in patch) await discoverWorktrees();
+  if ('roots' in patch || 'extraRepos' in patch || 'ignoreRepos' in patch) {
+    await discoverWorktrees();
+    // Link sessions and PRs to worktrees found just now, as at startup, rather than at the next poll.
+    refreshSessions();
+    void refreshPRs().then(changed, () => {});
+  }
   changed();
 }
 

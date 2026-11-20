@@ -58,9 +58,24 @@ function recentClaudeCwds(): string[] {
   return claudeCwds.dirs;
 }
 
+/** The ignored repos' paths, as written and as resolved, so a symlinked or ~ path still matches. */
+function ignoredRoots(): Set<string> {
+  const out = new Set<string>();
+  for (const p of config.ignoreRepos) {
+    const full = path.resolve(expand(p));
+    out.add(full);
+    try { out.add(fs.realpathSync(full)); } catch {}
+  }
+  return out;
+}
+
 export async function discoverRepos(): Promise<void> {
+  const ignored = ignoredRoots();
+  // Forget repos ignored since they were found; their worktrees drop out when they're next listed.
+  for (const [k, r] of repos) if (ignored.has(r.root)) repos.delete(k);
   const candidates = new Set(config.extraRepos.map(expand));
-  const known = [...wts.values()].map((w) => w.path);
+  // Folders inside an ignored repo needn't be asked which repo they're in.
+  const known = [...wts.values()].map((w) => w.path).concat([...ignored]);
   for (const dir of recentClaudeCwds()) {
     if (known.some((p) => dir === p || dir.startsWith(p + '/'))) continue;
     try {
@@ -83,6 +98,7 @@ export async function discoverRepos(): Promise<void> {
       if (repos.has(common)) continue;
       // Name the repo after its main checkout, not whichever worktree we found first.
       const mainDir = path.basename(common) === '.git' ? path.dirname(common) : p;
+      if (ignored.has(fs.existsSync(mainDir) ? mainDir : p)) continue;
       const repo: Repo = { root: fs.existsSync(mainDir) ? mainDir : p, commonDir: common, name: path.basename(mainDir).replace(/\.git$/, ''), gh: null, defaultBase: 'origin/main' };
       try {
         const url = (await git(p, ['remote', 'get-url', 'origin'])).trim();

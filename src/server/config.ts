@@ -9,6 +9,8 @@ export const DEFAULT_CONFIG: Config = {
   roots: [],
   // Extra repo paths to always include.
   extraRepos: [],
+  // Repos to leave out even when sessions work in them, by the path of their main checkout.
+  ignoreRepos: [],
   // Remove a worktree automatically once its PR is merged (only when safe).
   autoCleanup: true,
   // Worktrees touched within this many days count as "recent".
@@ -35,6 +37,7 @@ function loadConfig(): Config {
   return {
     roots: isStringArray(o.roots) ? o.roots : d.roots,
     extraRepos: isStringArray(o.extraRepos) ? o.extraRepos : d.extraRepos,
+    ignoreRepos: isStringArray(o.ignoreRepos) ? o.ignoreRepos : d.ignoreRepos,
     autoCleanup: typeof o.autoCleanup === 'boolean' ? o.autoCleanup : d.autoCleanup,
     recentDays: typeof o.recentDays === 'number' ? o.recentDays : d.recentDays,
     prPollMinutes: typeof o.prPollMinutes === 'number' ? o.prPollMinutes : d.prPollMinutes,

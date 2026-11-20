@@ -585,6 +585,52 @@ test('settings: integrations, config, folders, onboarding', async () => {
   assert.ok((await state()).onboardedAt);
 });
 
+describe('ignoreRepos', () => {
+  const shop = (w: Json) => w.repoName === 'shop';
+  let listed: { worktrees: number; withPRs: number };
+
+  before(async () => {
+    const st = await state();
+    listed = { worktrees: st.worktrees.length, withPRs: st.worktrees.filter((w: Json) => w.pr).length };
+  });
+
+  test('a repo is listed before it is hidden', async () => {
+    assert.ok((await state()).repos.some((r: Json) => r.name === 'shop'));
+  });
+
+  test('rejects a value that is not a list', async () => {
+    assert.equal((await api('POST', '/api/config', { ignoreRepos: 'shop' })).status, 400);
+  });
+
+  describe('hiding a repo', () => {
+    before(async () => { await post('/api/config', { ignoreRepos: ['~/code/shop'] }); });
+
+    test('saves its path in the config', async () => {
+      assert.deepEqual((await state()).config.ignoreRepos, ['~/code/shop']);
+    });
+
+    test('leaves the repo out', async () => {
+      assert.ok(!(await state()).repos.some((r: Json) => r.name === 'shop'));
+    });
+
+    test('leaves its worktrees out', async () => {
+      assert.ok(!(await state()).worktrees.some(shop));
+    });
+  });
+
+  describe('showing it again', () => {
+    before(async () => { await post('/api/config', { ignoreRepos: [] }); });
+
+    test('brings its worktrees back', async () => {
+      await until(async () => (await state()).worktrees.length === listed.worktrees, 'the worktrees coming back');
+    });
+
+    test('fetches their PRs again', async () => {
+      await until(async () => (await state()).worktrees.filter((w: Json) => w.pr).length === listed.withPRs, 'their PRs being fetched again');
+    });
+  });
+});
+
 test('security: mutations need x-wtr, and only localhost hosts are served', async () => {
   assert.equal((await api('POST', '/api/config', { recentDays: 4 }, {})).status, 403);
   // fetch won't send a different Host header, so use http directly.

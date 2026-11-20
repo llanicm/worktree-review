@@ -35,6 +35,18 @@ function foldersHtml() {
   </div>`;
 }
 
+/** Repos left out with "hide", each with a way back. */
+function ignoredHtml() {
+  const ignored = st().config.ignoreRepos;
+  if (!ignored.length) return '';
+  const rows = ignored.map((p) => `
+    <div class="folder-row">
+      <code title="${esc(expandHome(p))}">${esc(tilde(expandHome(p)))}</code>
+      <button class="link-btn" data-act="unignore-repo" data-path="${esc(p)}">show</button>
+    </div>`).join('');
+  return `<details><summary>Hidden repos (${ignored.length})</summary><div class="folders">${rows}</div></details>`;
+}
+
 /** The plugin's install state, with the button that installs it. Shared by the setup page and the sidebar note. */
 export function pluginHtml(compact = false) {
   const p = st().plugin;
@@ -100,7 +112,9 @@ export function setupHtml(mode: Page) {
     `<p>${state.worktrees.length
       ? `Found <strong>${state.worktrees.length} worktree${state.worktrees.length === 1 ? '' : 's'}</strong> in ${nRepos} repo${nRepos === 1 ? '' : 's'}, from the folders your Claude Code sessions have worked in over the last 30 days.`
       : 'No worktrees yet. Repos appear here once a Claude Code session has worked in them, or add a folder below.'}</p>
-     ${nRepos ? `<div class="repo-list">${state.repos.map((r) => `<div><strong>${esc(r.name)}</strong> <code>${esc(tilde(r.root))}</code>${r.github ? ` <span class="muted">${esc(r.github)}</span>` : ''}</div>`).join('')}</div>` : ''}
+     ${nRepos ? `<div class="repo-list">${state.repos.map((r) => `<div><strong>${esc(r.name)}</strong> <code>${esc(tilde(r.root))}</code>${r.github ? ` <span class="muted">${esc(r.github)}</span>` : ''}
+       <button class="link-btn" data-act="ignore-repo" data-path="${esc(tilde(r.root))}" title="Leave this repo and its worktrees out">hide</button></div>`).join('')}</div>` : ''}
+     ${ignoredHtml()}
      <details ${welcome && state.worktrees.length ? '' : 'open'}><summary>Also scan these folders</summary>${foldersHtml()}</details>`));
 
   // 2. Claude Code

@@ -16,6 +16,8 @@ export interface Config {
   roots: string[];
   /** Extra repo paths to always include. */
   extraRepos: string[];
+  /** Repos to leave out even when sessions work in them, by the path of their main checkout. */
+  ignoreRepos: string[];
   /** Remove a worktree automatically once its PR merges (only when safe). */
   autoCleanup: boolean;
   /** Worktrees touched within this many days count as "recent". */

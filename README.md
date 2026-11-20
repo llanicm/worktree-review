@@ -188,6 +188,7 @@ dashboard: `curl -X POST -H 'x-wtr: 1' localhost:4747/api/shutdown`, then start 
 |---|---|---|
 | `roots` | `[]` | Extra folders whose immediate children are scanned for repos |
 | `extraRepos` | `[]` | Extra repos to always include |
+| `ignoreRepos` | `[]` | Repos to leave out even when sessions work in them, by their main checkout's path. *hide* next to a repo in Settings adds it |
 | `autoCleanup` | `true` | Remove worktrees automatically when their PR merges |
 | `recentDays` | `3` | How long a worktree counts as *Recent* |
 | `prPollMinutes` | `5` | How often PR status is checked |
