@@ -809,6 +809,7 @@ describe('replying on GitHub', { skip: !fs.existsSync(process.env.CHROME || '/Ap
     await page.waitFor(`document.querySelector('${editor}')`);
     await page.eval(`(() => { const t = document.querySelector('${editor}'); t.value = ${JSON.stringify(text)}; t.dispatchEvent(new Event('input', { bubbles: true })); })()`);
   };
+  const button = `document.querySelector('[data-act=save-editor][data-ek="gh:${thread}"]')`;
   const posted = () => page.waitFor(`!document.querySelector('${editor}')`);
 
   before(async () => {
@@ -817,13 +818,32 @@ describe('replying on GitHub', { skip: !fs.existsSync(process.env.CHROME || '/Ap
   });
   after(() => page.close());
 
+  describe('while the reply is posting', () => {
+    let busy: { disabled: boolean; spinner: boolean };
+
+    before(async () => {
+      await startReply('Watched while posting');
+      // Read the button straight after the click, before GitHub answers.
+      busy = await page.eval(`(() => { ${button}.click(); const b = ${button}; return { disabled: b.disabled, spinner: !!b.querySelector('.spinner') }; })()`);
+      await posted();
+    });
+
+    test('disables Post reply', () => {
+      assert.equal(busy.disabled, true);
+    });
+
+    test('shows a spinner on it', () => {
+      assert.equal(busy.spinner, true);
+    });
+  });
+
   describe('clicking Post reply twice', () => {
     let was: number;
 
     before(async () => {
       was = await replies();
       await startReply('Double-clicked');
-      await page.eval(`(() => { const b = document.querySelector('[data-act=save-editor][data-ek="gh:${thread}"]'); b.click(); b.click(); })()`);
+      await page.eval(`(() => { ${button}.click(); ${button}.click(); })()`);
       await posted();
     });
 

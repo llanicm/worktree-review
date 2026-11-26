@@ -6,7 +6,7 @@ import { curWt, S, view } from './state.ts';
 import type { View, ViewFile } from './types.ts';
 import { ago, editorLink, editorName, esc, fnv, md } from './util.ts';
 import { lazyPlaceholder, lazyPlaceholderHtml } from './lazy.ts';
-import { openThreads, prThreadHtml } from './pr-threads.ts';
+import { openThreads, prThreadHtml, saveButtonHtml } from './pr-threads.ts';
 
 export const commitClass = (n: number) => (n === 0 ? 'cu' : `c${((n - 1) % 8) + 1}`);
 export const commitLabel = (n: number) => (n === 0 ? 'uncommitted' : `#${n}`);
@@ -44,7 +44,7 @@ export function editorHtml(ek: string, label: string) {
   return `<div class="editor"><textarea data-ek="${esc(ek)}" placeholder="Leave a comment">${esc(S.editors.get(ek) || '')}</textarea>
     <div class="actions"><span class="hint">⌘↵ to save · Esc to cancel</span>
       <button class="btn small" data-act="cancel-editor" data-ek="${esc(ek)}">Cancel</button>
-      <button class="btn small primary" data-act="save-editor" data-ek="${esc(ek)}">${label}</button></div></div>`;
+      ${saveButtonHtml(ek, label)}</div></div>`;
 }
 
 export function threadHtml(c: Comment) {

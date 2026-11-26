@@ -177,6 +177,9 @@ h1 .pr-no { color: var(--fg-muted); font-weight: 400; }
 }
 .btn:hover:not(:disabled) { background: var(--bg-sunk); }
 .btn:disabled { opacity: .5; cursor: default; }
+.btn .spinner { display: inline-block; width: 10px; height: 10px; margin-right: 6px; vertical-align: -1px; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .btn .spinner { animation-duration: 2s; } }
 .btn.primary { background: var(--green); border-color: var(--green); color: #fff; }
 .btn.primary:hover:not(:disabled) { filter: brightness(1.08); background: var(--green); }
 .btn.danger { color: var(--red); }

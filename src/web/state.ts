@@ -18,6 +18,7 @@ export const S: State = {
   view: null,
   seq: 0,
   editors: new Map(),
+  saving: new Set(),
   focusEk: null,
   toggled: new Map(),
   forceRender: new Set(),
