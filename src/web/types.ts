@@ -102,6 +102,7 @@ export interface State {
   view: View | null;
   seq: number;
   editors: Map<string, string>;    // editor key -> text
+  saving: Set<string>;             // editor keys whose save is in flight
   focusEk: string | null;
   toggled: Map<string, boolean>;   // file uid -> collapsed?
   forceRender: Set<string>;

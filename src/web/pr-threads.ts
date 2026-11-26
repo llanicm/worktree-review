@@ -66,6 +66,12 @@ function msgHtml(t: PRThread, i: number) {
     ${i === 0 && t.codegen ? `<details><summary>Fix guidance for agents</summary><div class="msg-body">${md(t.codegen)}</div></details>` : ''}</div>`;
 }
 
+/** An editor's save button, disabled with a spinner while its save is in flight. */
+export function saveButtonHtml(ek: string, label: string) {
+  const busy = S.saving.has(ek);
+  return `<button class="btn small primary" data-act="save-editor" data-ek="${esc(ek)}" data-label="${esc(label)}"${busy ? ' disabled aria-busy="true"' : ''}>${busy ? '<span class="spinner" aria-hidden="true"></span>' : ''}${esc(label)}</button>`;
+}
+
 /** One thread: its comments, and what you can do with it here and on GitHub. */
 export function prThreadHtml(t: PRThread, inline = false) {
   const ek = `gh:${t.id}`;
@@ -92,7 +98,7 @@ export function prThreadHtml(t: PRThread, inline = false) {
     ${replying ? `<div class="msg"><div class="editor"><textarea data-ek="${esc(ek)}" placeholder="Reply on GitHub, as you">${esc(S.editors.get(ek) || '')}</textarea>
       <div class="actions"><span class="hint">Posted to the PR as you · ⌘↵ to post · Esc to cancel</span>
         <button class="btn small" data-act="cancel-editor" data-ek="${esc(ek)}">Cancel</button>
-        <button class="btn small primary" data-act="save-editor" data-ek="${esc(ek)}">Post reply</button></div></div></div>` : ''}
+        ${saveButtonHtml(ek, 'Post reply')}</div></div></div>` : ''}
     <div class="thread-actions">${acts.join('')}</div></div>`;
 }
 

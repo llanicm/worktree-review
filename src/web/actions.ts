@@ -7,7 +7,7 @@ import { cleanPicked, cleanupGroups } from './cleanup.ts';
 import { keyOf, parseKey, sameCommit } from './diff.ts';
 import { blameKey, fileCommitsOf, isCollapsed } from './file.ts';
 import { loadView, reloadComments } from './loading.ts';
-import { loadPRThreads, syncPRThreads } from './pr-threads.ts';
+import { loadPRThreads, saveButtonHtml, syncPRThreads } from './pr-threads.ts';
 import { closePicker, openPicker } from './picker.ts';
 import { closeResult, showResult } from './result.ts';
 import { loadIntegrations, saveConfig } from './setup.ts';
@@ -31,9 +31,21 @@ function lineTextFor(key: string) {
   return '';
 }
 
+/** Redraws an editor's save button in place, so it shows at once whether its save is in flight. */
+function redrawSaveButton(ek: string) {
+  for (const b of document.querySelectorAll<HTMLElement>(`[data-act="save-editor"][data-ek="${CSS.escape(ek)}"]`)) b.outerHTML = saveButtonHtml(ek, b.dataset.label || b.textContent || '');
+}
+
+// A second click or ⌘Enter while the first save is in flight is ignored, so it can't post twice.
 export async function saveEditor(ek: string) {
   const text = (S.editors.get(ek) || '').trim();
-  if (!text) return;
+  if (!text || S.saving.has(ek)) return;
+  S.saving.add(ek);
+  redrawSaveButton(ek);
+  try { await save(ek, text); } finally { S.saving.delete(ek); redrawSaveButton(ek); }
+}
+
+async function save(ek: string, text: string) {
   const [kind, rest] = [ek.slice(0, ek.indexOf(':')), ek.slice(ek.indexOf(':') + 1)];
   if (kind === 'new') {
     const { commit, file, side, line } = parseKey(rest);

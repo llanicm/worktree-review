@@ -797,6 +797,80 @@ describe('the review box', { skip: !fs.existsSync(process.env.CHROME || '/Applic
   });
 });
 
+describe('replying on GitHub', { skip: !fs.existsSync(process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome') && 'Chrome not found' }, () => {
+  const thread = 'PRRT_kwDOdemo-3';
+  const editor = `textarea[data-ek="gh:${thread}"]`;
+  let page: Awaited<ReturnType<typeof openPage>>;
+  let wtId: string;
+  const replies = async () => (await get(`/api/worktrees/${wtId}/pr-threads`)).threads.find((t: Json) => t.id === thread).comments.length;
+  const startReply = async (text: string) => {
+    await page.waitFor(`document.querySelector('[data-act=pr-reply][data-id=${thread}]')`);
+    await page.eval(`document.querySelector('[data-act=pr-reply][data-id=${thread}]').click()`);
+    await page.waitFor(`document.querySelector('${editor}')`);
+    await page.eval(`(() => { const t = document.querySelector('${editor}'); t.value = ${JSON.stringify(text)}; t.dispatchEvent(new Event('input', { bubbles: true })); })()`);
+  };
+  const button = `document.querySelector('[data-act=save-editor][data-ek="gh:${thread}"]')`;
+  const posted = () => page.waitFor(`!document.querySelector('${editor}')`);
+
+  before(async () => {
+    wtId = (await wtBy('fix/tax-rounding')).id;
+    page = await openPage(`${BASE}/#/${wtId}`);
+  });
+  after(() => page.close());
+
+  describe('while the reply is posting', () => {
+    let busy: { disabled: boolean; spinner: boolean };
+
+    before(async () => {
+      await startReply('Watched while posting');
+      // Read the button straight after the click, before GitHub answers.
+      busy = await page.eval(`(() => { ${button}.click(); const b = ${button}; return { disabled: b.disabled, spinner: !!b.querySelector('.spinner') }; })()`);
+      await posted();
+    });
+
+    test('disables Post reply', () => {
+      assert.equal(busy.disabled, true);
+    });
+
+    test('shows a spinner on it', () => {
+      assert.equal(busy.spinner, true);
+    });
+  });
+
+  describe('clicking Post reply twice', () => {
+    let was: number;
+
+    before(async () => {
+      was = await replies();
+      await startReply('Double-clicked');
+      await page.eval(`(() => { ${button}.click(); ${button}.click(); })()`);
+      await posted();
+    });
+
+    test('posts the reply once', async () => {
+      assert.equal(await replies(), was + 1);
+    });
+  });
+
+  describe('clicking Post reply and pressing ⌘Enter', () => {
+    let was: number;
+
+    before(async () => {
+      was = await replies();
+      await startReply('Clicked and pressed');
+      await page.eval(`(() => {
+        document.querySelector('[data-act=save-editor][data-ek="gh:${thread}"]').click();
+        document.querySelector('${editor}').dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true, cancelable: true }));
+      })()`);
+      await posted();
+    });
+
+    test('posts the reply once', async () => {
+      assert.equal(await replies(), was + 1);
+    });
+  });
+});
+
 describe('commit order', { skip: !fs.existsSync(process.env.CHROME || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome') && 'Chrome not found' }, () => {
   let page: Awaited<ReturnType<typeof openPage>>;
   let wt: Json;
