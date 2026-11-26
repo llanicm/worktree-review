@@ -31,9 +31,17 @@ function lineTextFor(key: string) {
   return '';
 }
 
+// Editors being saved, so a second click or ⌘Enter while the first save is in flight doesn't post it again.
+const saving = new Set<string>();
+
 export async function saveEditor(ek: string) {
   const text = (S.editors.get(ek) || '').trim();
-  if (!text) return;
+  if (!text || saving.has(ek)) return;
+  saving.add(ek);
+  try { await save(ek, text); } finally { saving.delete(ek); }
+}
+
+async function save(ek: string, text: string) {
   const [kind, rest] = [ek.slice(0, ek.indexOf(':')), ek.slice(ek.indexOf(':') + 1)];
   if (kind === 'new') {
     const { commit, file, side, line } = parseKey(rest);
